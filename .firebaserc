@@ -1,0 +1,17 @@
+{
+  "projects": {
+    "default": "nagarnetra-4a55d"
+  },
+  "targets": {
+    "nagarnetra-4a55d": {
+      "hosting": {
+        "admin": [
+          "swachhos-admin"
+        ],
+        "public": [
+          "swachhos-public"
+        ]
+      }
+    }
+  }
+}

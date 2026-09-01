@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Completely private to backend (Cloud Functions bypass rules using Admin SDK)
+    match /whatsapp_sessions/{session} {
+      allow read, write: if false;
+    }
+
+    match /photo_hashes/{hash} {
+      allow read, write: if false;
+    }
+
+    // Read-only for dashboard client, written by backend
+    match /meta/{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Private collections containing citizen PII (phone numbers) - Authenticated Admin read only
+    match /feedback/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /reports/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Read-only for public, restricted update for ticket resolution by authenticated admins
+    match /dumpPoints/{document=**} {
+      allow read: if true;
+      allow create, delete: if false;
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolved_at'])
+                    && request.resource.data.status == 'resolved';
+    }
+  }
+}
+
+

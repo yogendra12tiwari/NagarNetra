@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>SwachhOS — System Design</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1920px;
+    height: 1080px;
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: #0a0e1a;
+    color: #e2e8f0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    z-index: 0;
+  }
+
+  .slide {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    padding: 40px 56px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    flex-shrink: 0;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .logo {
+    width: 52px;
+    height: 52px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    box-shadow: 0 0 30px rgba(99,102,241,0.3);
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #e2e8f0, #94a3b8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .header h1 span {
+    background: linear-gradient(135deg, #6366f1, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .header-badge {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6366f1;
+    background: rgba(99,102,241,0.1);
+    border: 1px solid rgba(99,102,241,0.2);
+    padding: 6px 16px;
+    border-radius: 20px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* ── MAIN CONTENT ── */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-height: 0;
+  }
+
+  /* ── ROW: Architecture + Side Panel ── */
+  .main-row {
+    display: flex;
+    gap: 20px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* ── ARCHITECTURE DIAGRAM ── */
+  .arch-panel {
+    flex: 1;
+    background: rgba(15,20,35,0.8);
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .arch-panel h2 {
+    font-size: 13px;
+    font-weight: 700;
+    color: #6366f1;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 18px;
+    flex-shrink: 0;
+  }
+
+  .arch-diagram {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0;
+  }
+
+  /* Layer rows */
+  .layer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+  }
+
+  .layer-label {
+    width: 110px;
+    text-align: right;
+    font-size: 9px;
+    font-weight: 700;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+    line-height: 1.3;
+  }
+
+  .layer-boxes {
+    display: flex;
+    gap: 10px;
+    flex: 1;
+  }
+
+  .box {
+    background: rgba(30,35,55,0.9);
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    flex: 1;
+    min-height: 52px;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .box .icon {
+    font-size: 18px;
+    margin-bottom: 3px;
+  }
+  .box .label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #e2e8f0;
+    line-height: 1.2;
+  }
+  .box .sub {
+    font-size: 8px;
+    color: #64748b;
+    margin-top: 1px;
+  }
+
+  /* Color variants */
+  .box.citizen {
+    border-color: rgba(34,197,94,0.3);
+    background: rgba(34,197,94,0.05);
+  }
+  .box.citizen .label { color: #4ade80; }
+
+  .box.gateway {
+    border-color: rgba(59,130,246,0.3);
+    background: rgba(59,130,246,0.05);
+  }
+  .box.gateway .label { color: #60a5fa; }
+
+  .box.serverless {
+    border-color: rgba(249,115,22,0.3);
+    background: rgba(249,115,22,0.05);
+  }
+  .box.serverless .label { color: #fb923c; }
+
+  .box.ai {
+    border-color: rgba(168,85,247,0.3);
+    background: rgba(168,85,247,0.05);
+  }
+  .box.ai .label { color: #c084fc; }
+
+  .box.data {
+    border-color: rgba(234,179,8,0.3);
+    background: rgba(234,179,8,0.05);
+  }
+  .box.data .label { color: #facc15; }
+
+  .box.frontend {
+    border-color: rgba(99,102,241,0.3);
+    background: rgba(99,102,241,0.05);
+  }
+  .box.frontend .label { color: #818cf8; }
+
+  .box.service {
+    border-color: rgba(236,72,153,0.3);
+    background: rgba(236,72,153,0.05);
+  }
+  .box.service .label { color: #f472b6; }
+
+  /* Arrow connectors between layers */
+  .arrow-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 0 4px 122px;
+  }
+  .arrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 8px;
+    color: #475569;
+    font-weight: 600;
+  }
+  .arrow svg {
+    flex-shrink: 0;
+  }
+
+  /* ── SIDE PANELS ── */
+  .side-panels {
+    width: 380px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .info-card {
+    background: rgba(15,20,35,0.8);
+    border: 1px solid rgba(99,102,241,0.15);
+    border-radius: 14px;
+    padding: 16px 18px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .info-card h3 {
+    font-size: 11px;
+    font-weight: 700;
+    color: #6366f1;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+
+  .tech-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .tech-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: #cbd5e1;
+    font-weight: 500;
+  }
+  .tech-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Data flow mini */
+  .flow-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .flow-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: #cbd5e1;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(30,35,55,0.6);
+  }
+  .flow-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(99,102,241,0.2);
+    color: #818cf8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .flow-arrow-down {
+    text-align: center;
+    color: #334155;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  /* ── BOTTOM BAR: Serverless Details ── */
+  .bottom-bar {
+    display: flex;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .metric-card {
+    flex: 1;
+    background: rgba(15,20,35,0.8);
+    border: 1px solid rgba(99,102,241,0.12);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .metric-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .metric-icon.purple { background: rgba(168,85,247,0.15); }
+  .metric-icon.green { background: rgba(34,197,94,0.15); }
+  .metric-icon.blue { background: rgba(59,130,246,0.15); }
+  .metric-icon.orange { background: rgba(249,115,22,0.15); }
+  .metric-icon.yellow { background: rgba(234,179,8,0.15); }
+
+  .metric-text .value {
+    font-size: 14px;
+    font-weight: 800;
+    color: #e2e8f0;
+  }
+  .metric-text .desc {
+    font-size: 9px;
+    color: #64748b;
+    font-weight: 500;
+    margin-top: 1px;
+  }
+
+  /* Connector lines */
+  .connector {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 0 122px;
+  }
+  .connector svg {
+    display: block;
+  }
+</style>
+</head>
+<body>
+<div class="slide">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">🗑️</div>
+      <h1><span>SwachhOS</span> — System Design</h1>
+    </div>
+    <div class="header-badge">Serverless Architecture</div>
+  </div>
+
+  <div class="content">
+
+    <!-- MAIN ROW -->
+    <div class="main-row">
+
+      <!-- ARCHITECTURE DIAGRAM -->
+      <div class="arch-panel">
+        <h2>Architecture Overview</h2>
+        <div class="arch-diagram">
+
+          <!-- LAYER 1: Citizens -->
+          <div class="layer">
+            <div class="layer-label">Citizens</div>
+            <div class="layer-boxes">
+              <div class="box citizen">
+                <div class="icon">📱</div>
+                <div class="label">WhatsApp</div>
+                <div class="sub">Photo + Location</div>
+              </div>
+              <div class="box citizen">
+                <div class="icon">🌐</div>
+                <div class="label">Web Dashboard</div>
+                <div class="sub">React SPA</div>
+              </div>
+              <div class="box citizen">
+                <div class="icon">👩‍💼</div>
+                <div class="label">City Admin</div>
+                <div class="sub">Command Center</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arrow -->
+          <div class="arrow-row">
+            <div class="arrow">
+              <svg width="20" height="14"><path d="M10 0 L10 10 M5 6 L10 12 L15 6" stroke="#475569" stroke-width="1.5" fill="none"/></svg>
+              HTTPS / Webhook
+            </div>
+          </div>
+
+          <!-- LAYER 2: Managed Services -->
+          <div class="layer">
+            <div class="layer-label">Managed<br>Services</div>
+            <div class="layer-boxes">
+              <div class="box gateway">
+                <div class="icon">💬</div>
+                <div class="label">Twilio WhatsApp</div>
+                <div class="sub">Message Gateway</div>
+              </div>
+              <div class="box service">
+                <div class="icon">🔒</div>
+                <div class="label">Firebase Auth</div>
+                <div class="sub">User Identity</div>
+              </div>
+              <div class="box service">
+                <div class="icon">🌐</div>
+                <div class="label">Firebase Hosting</div>
+                <div class="sub">CDN + SSL</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arrow -->
+          <div class="arrow-row">
+            <div class="arrow">
+              <svg width="20" height="14"><path d="M10 0 L10 10 M5 6 L10 12 L15 6" stroke="#475569" stroke-width="1.5" fill="none"/></svg>
+              Event-Driven / Real-time
+            </div>
+          </div>
+
+          <!-- LAYER 3: Serverless Compute -->
+          <div class="layer">
+            <div class="layer-label">Serverless<br>Compute</div>
+            <div class="layer-boxes">
+              <div class="box serverless">
+                <div class="icon">⚡</div>
+                <div class="label">Cloud Function</div>
+                <div class="sub">twilioWebhook</div>
+              </div>
+              <div class="box ai">
+                <div class="icon">🤖</div>
+                <div class="label">Gemini AI</div>
+                <div class="sub">Priority Ranking</div>
+              </div>
+              <div class="box serverless">
+                <div class="icon">📊</div>
+                <div class="label">Cloud Function</div>
+                <div class="sub">Data Migration</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arrow -->
+          <div class="arrow-row">
+            <div class="arrow">
+              <svg width="20" height="14"><path d="M10 0 L10 10 M5 6 L10 12 L15 6" stroke="#475569" stroke-width="1.5" fill="none"/></svg>
+              Read / Write / onSnapshot
+            </div>
+          </div>
+
+          <!-- LAYER 4: Data Layer -->
+          <div class="layer">
+            <div class="layer-label">Data Layer</div>
+            <div class="layer-boxes">
+              <div class="box data">
+                <div class="icon">🗄️</div>
+                <div class="label">Firestore</div>
+                <div class="sub">Real-time NoSQL</div>
+              </div>
+              <div class="box data">
+                <div class="icon">📦</div>
+                <div class="label">Firebase Storage</div>
+                <div class="sub">Photos / Media</div>
+              </div>
+              <div class="box data">
+                <div class="icon">📋</div>
+                <div class="label">Cloud Functions</div>
+                <div class="sub">Scheduled Cleanup</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arrow -->
+          <div class="arrow-row">
+            <div class="arrow">
+              <svg width="20" height="14"><path d="M10 0 L10 10 M5 6 L10 12 L15 6" stroke="#475569" stroke-width="1.5" fill="none"/></svg>
+              Real-time Sync → React State
+            </div>
+          </div>
+
+          <!-- LAYER 5: Frontend -->
+          <div class="layer">
+            <div class="layer-label">Frontend<br>Dashboard</div>
+            <div class="layer-boxes">
+              <div class="box frontend">
+                <div class="icon">🗺️</div>
+                <div class="label">Map Tab</div>
+                <div class="sub">Leaflet + Supercluster + H3</div>
+              </div>
+              <div class="box frontend">
+                <div class="icon">📈</div>
+                <div class="label">Analysis Tab</div>
+                <div class="sub">Recharts</div>
+              </div>
+              <div class="box frontend">
+                <div class="icon">🧠</div>
+                <div class="label">Insights Tab</div>
+                <div class="sub">AI Scoring</div>
+              </div>
+              <div class="box frontend">
+                <div class="icon">👥</div>
+                <div class="label">Coordination</div>
+                <div class="sub">Team Dispatch</div>
+              </div>
+              <div class="box frontend">
+                <div class="icon">💬</div>
+                <div class="label">Feedback</div>
+                <div class="sub">Surveys</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- SIDE PANELS -->
+      <div class="side-panels">
+
+        <!-- Tech Stack -->
+        <div class="info-card">
+          <h3>🔧 Tech Stack</h3>
+          <div class="tech-list">
+            <div class="tech-item"><div class="tech-dot" style="background:#61dafb"></div>React 19 + Vite 8 + TailwindCSS 4</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#34a853"></div>Firebase (Firestore, Functions, Hosting)</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#a78bfa"></div>Google Gemini 2.5 (AI Priority Scoring)</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#199900"></div>Leaflet + Supercluster (Map Clustering)</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#f97316"></div>Uber H3 (Hexagonal Grid Zones)</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#25d366"></div>Twilio WhatsApp Business API</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#22d3ee"></div>Recharts (Analytics Charts)</div>
+            <div class="tech-item"><div class="tech-dot" style="background:#ef4444"></div>OxLint (Rust-based Linter)</div>
+          </div>
+        </div>
+
+        <!-- Data Flow -->
+        <div class="info-card">
+          <h3>🔄 Data Flow</h3>
+          <div class="flow-steps">
+            <div class="flow-step"><div class="flow-num">1</div>Citizen sends WhatsApp (photo + location)</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">2</div>Twilio → Cloud Function webhook</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">3</div>Session state machine processes input</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">4</div>Writes to Firestore (dumpPoints + reports)</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">5</div>onSnapshot pushes real-time update to SPA</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">6</div>Dashboard re-renders with new data</div>
+            <div class="flow-arrow-down">↓</div>
+            <div class="flow-step"><div class="flow-num">7</div>Admin assigns team via H3 hex zone</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <div class="bottom-bar">
+      <div class="metric-card">
+        <div class="metric-icon purple">⚡</div>
+        <div class="metric-text">
+          <div class="value">Zero Servers</div>
+          <div class="desc">100% serverless — Firebase Cloud Functions auto-scale</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon green">🔄</div>
+        <div class="metric-text">
+          <div class="value">Real-time Sync</div>
+          <div class="desc">Firestore onSnapshot → React state → UI update</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon blue">🛡️</div>
+        <div class="metric-text">
+          <div class="value">3-Tier Fallback</div>
+          <div class="desc">Gemini Lite → Gemini Flash → Local scoring</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon orange">🗺️</div>
+        <div class="metric-text">
+          <div class="value">H3 Hex Grid</div>
+          <div class="desc">Uber H3 resolution 6 — ~36 km² zones for dispatch</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon yellow">💰</div>
+        <div class="metric-text">
+          <div class="value">Pay-per-Use</div>
+          <div class="desc">No idle costs — pay only for invocations & storage</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
