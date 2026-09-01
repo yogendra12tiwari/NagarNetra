@@ -30,3 +30,4 @@ dist-ssr
 serviceAccount*.json
 *-firebase-adminsdk-*.json
 credentials*.json
+scratch/

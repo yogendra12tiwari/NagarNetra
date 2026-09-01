@@ -6,8 +6,8 @@ const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 
 // Primary and Fallback models
-const primaryModel = genAI ? genAI.getGenerativeModel({ model: "gemini-3.6-flash" }) : null;
-const fallbackModel = genAI ? genAI.getGenerativeModel({ model: "gemini-2.5-flash" }) : null;
+const primaryModel = genAI ? genAI.getGenerativeModel({ model: "gemma-4-26b-a4b-it" }) : null;
+const fallbackModel = genAI ? genAI.getGenerativeModel({ model: "gemini-3.6-flash" }) : null;
 
 export async function analyzeDumpPoints(dumpPoints) {
   if (!primaryModel || !fallbackModel) {

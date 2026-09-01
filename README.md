@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/swachhos-logo-highres.png" alt="NagarNetra Logo" width="150" />
+  <img src="assets/nagarnetra-logo-highres.png" alt="NagarNetra Logo" width="150" />
   
   # NagarNetra
   **AI-Powered Civic Sanitation Intelligence Platform**

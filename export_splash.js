@@ -36,7 +36,7 @@ import path from 'path';
                 <div class="w-28 h-28 bg-indigo-600 rounded-3xl flex items-center justify-center shadow-[0_25px_50px_-12px_rgba(99,102,241,0.5)] rotate-3">
                     <i data-lucide="trash-2" class="text-white w-14 h-14"></i>
                 </div>
-                <h1 class="mt-6 text-4xl font-black text-gray-900 tracking-tight">SwachhOS</h1>
+                <h1 class="mt-6 text-4xl font-black text-gray-900 tracking-tight">NagarNetra</h1>
                 <p class="text-sm uppercase tracking-widest text-indigo-500 font-bold mt-2 text-center whitespace-nowrap">COMMAND CENTER FOR A CLEANER CITY</p>
             </div>
 
@@ -110,7 +110,7 @@ import path from 'path';
     });
   });
 
-  const screenshotPath = path.resolve('swachhos-splash-illustration.png');
+  const screenshotPath = path.resolve('assets', 'nagarnetra-splash-illustration.png');
   await page.screenshot({ path: screenshotPath });
   await browser.close();
   console.log('Successfully generated high-res splash illustration at ' + screenshotPath);

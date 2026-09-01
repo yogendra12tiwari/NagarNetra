@@ -1,5 +1,6 @@
 import puppeteer from 'puppeteer';
 import fs from 'fs';
+import path from 'path';
 
 (async () => {
   const browser = await puppeteer.launch();
@@ -36,8 +37,8 @@ import fs from 'fs';
     </html>
   `;
   
-  await page.setContent(html);
-  await page.screenshot({ path: 'swachhos-logo-highres.png', omitBackground: true });
+  const logoPath = path.join('assets', 'nagarnetra-logo-highres.png');
+  await page.screenshot({ path: logoPath, omitBackground: true });
   await browser.close();
-  console.log('Successfully generated high-res logo at swachhos-logo-highres.png');
+  console.log('Successfully generated high-res logo at ' + logoPath);
 })();

@@ -116,7 +116,7 @@ const slides = [
     // Wait for Lucide icons to render
     await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 500)));
 
-    const screenshotPath = path.resolve(slide.name + ".png");
+    const screenshotPath = path.resolve('assets', slide.name + ".png");
     await page.screenshot({ path: screenshotPath });
     console.log('Generated:', screenshotPath);
   }
