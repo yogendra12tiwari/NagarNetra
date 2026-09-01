@@ -6,7 +6,7 @@ const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 
 // Primary and Fallback models
-const primaryModel = genAI ? genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" }) : null;
+const primaryModel = genAI ? genAI.getGenerativeModel({ model: "gemini-3.6-flash" }) : null;
 const fallbackModel = genAI ? genAI.getGenerativeModel({ model: "gemini-2.5-flash" }) : null;
 
 export async function analyzeDumpPoints(dumpPoints) {
@@ -135,19 +135,25 @@ export async function askRagAgent(query, chatHistory, points) {
       - Do NOT use markdown code blocks like \`\`\`json, just return normal conversational text.
     `;
 
-    const chat = primaryModel.startChat({
-      history: [
-        { role: "user", parts: [{ text: staticContext }] },
-        { role: "model", parts: [{ text: "Understood. I am ready to assist citizens." }] },
-        ...chatHistory.map(msg => ({
-          role: msg.role === 'user' ? 'user' : 'model',
-          parts: [{ text: msg.text }]
-        }))
-      ],
-    });
+    const history = [
+      { role: "user", parts: [{ text: staticContext }] },
+      { role: "model", parts: [{ text: "Understood. I am ready to assist citizens." }] },
+      ...chatHistory.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+      }))
+    ];
 
-    const result = await chat.sendMessage(query);
-    return result.response.text();
+    try {
+      const chat = primaryModel.startChat({ history });
+      const result = await chat.sendMessage(query);
+      return result.response.text();
+    } catch (primaryErr) {
+      console.warn("Primary model askRagAgent failed, trying fallback model:", primaryErr.message);
+      const fallbackChat = fallbackModel.startChat({ history });
+      const fallbackResult = await fallbackChat.sendMessage(query);
+      return fallbackResult.response.text();
+    }
   } catch (error) {
     console.error("Error in askRagAgent:", error);
     return "I'm sorry, I encountered an error while processing your request. Please try again later.";
