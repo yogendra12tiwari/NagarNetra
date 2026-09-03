@@ -56,7 +56,7 @@ export default function MapTab({ dumpPoints, reports = [], isPublic = false }) {
               <div 
                 key={report.id} 
                 onClick={() => {
-                  const point = dumpPoints.find(p => p.id === report.matched_point_id);
+                  const point = dumpPoints.find(p => p.id === report.matched_point_id || p.report_id === report.report_id || p.community_id === report.matched_point_id || p.id === report.id);
                   if (point && typeof point.lat === "number" && typeof point.lng === "number") {
                     setSelected(point);
                     setViewMode("pins");
@@ -68,8 +68,21 @@ export default function MapTab({ dumpPoints, reports = [], isPublic = false }) {
                 className="bg-white border border-gray-100 rounded-lg p-3 shadow-sm hover:shadow-md hover:border-gray-300 transition-all cursor-pointer"
               >
                 <div className="flex justify-between items-start mb-2">
-                  <p className="text-xs font-bold text-gray-900">{report.phone_number}</p>
-                  <p className="text-[10px] text-gray-400 font-mono">{new Date(report.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="text-xs font-bold text-gray-900">{report.phone_number}</p>
+                    {report.isReal && (
+                      <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        LIVE
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    {report.report_id && (
+                      <span className="text-[10px] font-mono font-bold text-indigo-600 block">{report.report_id}</span>
+                    )}
+                    <p className="text-[10px] text-gray-400 font-mono">{new Date(report.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                  </div>
                 </div>
                 {report.photo_url && (
                   <img src={report.photo_url} alt="Report" className="w-full h-24 object-cover rounded-md mb-2 bg-gray-50" />

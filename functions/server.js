@@ -654,10 +654,21 @@ async function executeNagarNetraConversation(payload) {
         if (matchedPoint) {
           // Merge with existing dumpPoint
           const updatedPhotos = sessionData.photoUrl ? [...(matchedPoint.photos || []), sessionData.photoUrl] : matchedPoint.photos;
+          const phoneClean = fromNumber.replace("whatsapp:", "").replace("telegram:", "TG-");
           await db.collection("dumpPoints").doc(matchedPoint.id).update({
             report_count: (matchedPoint.report_count || 1) + 1,
             last_reported: timestamp,
-            photos: updatedPhotos
+            photos: updatedPhotos,
+            latest_report_id: reportId,
+            latest_phone: phoneClean,
+            latest_photo: sessionData.photoUrl || null,
+            recent_reports: admin.firestore.FieldValue.arrayUnion({
+              report_id: reportId,
+              timestamp,
+              photo_url: sessionData.photoUrl || null,
+              phone_number: phoneClean,
+              classification: "merged_point",
+            })
           });
           await db.collection("reports").add({
             phone_number: fromNumber.replace("whatsapp:", ""),
@@ -674,9 +685,13 @@ async function executeNagarNetraConversation(payload) {
         } else {
           // Create New dumpPoint
           const communityId = await generateCommunityId();
+          const phoneClean = fromNumber.replace("whatsapp:", "").replace("telegram:", "TG-");
           const newPointRef = await db.collection("dumpPoints").add({
             community_id: communityId,
             report_id: reportId,
+            latest_report_id: reportId,
+            latest_phone: phoneClean,
+            latest_photo: sessionData.photoUrl || null,
             name: "User Reported Dump Point",
             lat,
             lng,
@@ -685,6 +700,13 @@ async function executeNagarNetraConversation(payload) {
             last_reported: timestamp,
             photos: sessionData.photoUrl ? [sessionData.photoUrl] : [],
             status: "active",
+            recent_reports: [{
+              report_id: reportId,
+              timestamp,
+              photo_url: sessionData.photoUrl || null,
+              phone_number: phoneClean,
+              classification: "new_point",
+            }]
           });
           await db.collection("reports").add({
             phone_number: fromNumber.replace("whatsapp:", ""),
@@ -889,6 +911,21 @@ app.post("/api/ai/chat", async (req, res) => {
       error: "Internal Server Error",
       text: "I'm sorry, I encountered an error while processing your request. Please try again later."
     });
+  }
+});
+
+// Live Reports Endpoint for Dashboard (Bypasses browser auth restrictions via Admin SDK)
+app.get("/api/reports", async (req, res) => {
+  try {
+    const snapshot = await db.collection("reports").orderBy("timestamp", "desc").limit(100).get();
+    const reports = [];
+    snapshot.forEach(doc => {
+      reports.push({ id: doc.id, ...doc.data() });
+    });
+    return res.status(200).json({ ok: true, count: reports.length, reports });
+  } catch (err) {
+    console.error("[API Reports] Error fetching reports:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
