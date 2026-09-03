@@ -129,7 +129,75 @@ async function sendWhatsApp(to, body, options = {}) {
   return getTwilioClient().messages.create(params);
 }
 
+// Telegram Helper: Send Message via Telegram Bot API
+async function sendTelegramMessage(chatId, text, options = {}) {
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!token) {
+    console.warn("[Telegram] TELEGRAM_BOT_TOKEN not configured; cannot send message.");
+    return { success: false, error: "TELEGRAM_BOT_TOKEN not configured" };
+  }
+
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const body = {
+    chat_id: chatId,
+    text: String(text),
+  };
+
+  if (options.reply_markup) {
+    body.reply_markup = options.reply_markup;
+  }
+
+  console.log(`[Telegram] Sending reply to Chat ID: ${chatId}`);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      console.error("[Telegram] API error:", {
+        status: response.status,
+        description: data.description || "Unknown Telegram error",
+        chatId,
+      });
+      return { success: false, error: data.description || "Telegram API error" };
+    }
+
+    console.log(`[Telegram] Reply sent to Chat ID: ${chatId}`);
+    return { success: true, message_id: data.result?.message_id };
+  } catch (err) {
+    console.error("[Telegram] Network error sending message:", {
+      message: err.message || "Network error",
+      chatId,
+    });
+    return { success: false, error: err.message };
+  }
+}
+
+// Telegram Helper: Retrieve downloadable URL for a photo file_id
+async function getTelegramFileUrl(fileId) {
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!token || !fileId) return null;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+    const data = await res.json().catch(() => ({}));
+    if (data.ok && data.result?.file_path) {
+      return `https://api.telegram.org/file/bot${token}/${data.result.file_path}`;
+    }
+  } catch (err) {
+    console.error("[Telegram] Error fetching file path:", err.message);
+  }
+  return null;
+}
+
 async function sendNagarNetraReply(to, text, options = {}) {
+  if (to.startsWith("telegram:")) {
+    const chatId = to.replace("telegram:", "");
+    return sendTelegramMessage(chatId, text, options);
+  }
+
   const mode = (process.env.WHATSAPP_MODE || "trial").toLowerCase().trim();
 
   if (mode === "trial") {
@@ -354,14 +422,26 @@ async function handleTwilioWebhook(req, res) {
 
   console.log("[Twilio] Calling webhook handler");
 
-  const fromNumber = req.body.From || "";
-  const incomingMsg = req.body.Body ? req.body.Body.toLowerCase().trim() : "";
-  const mediaUrl = req.body.MediaUrl0;
-  const lat = req.body.Latitude ? parseFloat(req.body.Latitude) : null;
-  const lng = req.body.Longitude ? parseFloat(req.body.Longitude) : null;
+  await executeNagarNetraConversation(req.body || {});
+
+  console.log("[Twilio] Webhook handler completed");
+  res.set("Content-Type", "text/xml");
+  res.status(200).send("<Response></Response>");
+}
+
+// Shared Core Conversation Engine for WhatsApp & Telegram
+async function executeNagarNetraConversation(payload) {
+  const fromNumber = payload.From || "";
+  const rawBody = payload.Body || "";
+  const incomingMsg = rawBody.toLowerCase().trim();
+  const mediaUrl = payload.MediaUrl0;
+  const lat = payload.Latitude ? parseFloat(payload.Latitude) : null;
+  const lng = payload.Longitude ? parseFloat(payload.Longitude) : null;
 
   const twiml = new MessagingResponse();
-  const sessionRef = db.collection("whatsapp_sessions").doc(fromNumber);
+  const sessionCollection = fromNumber.startsWith("telegram:") ? "telegram_sessions" : "whatsapp_sessions";
+  const sessionDocId = fromNumber.startsWith("telegram:") ? fromNumber.replace("telegram:", "") : fromNumber;
+  const sessionRef = db.collection(sessionCollection).doc(sessionDocId);
 
   // Reply collector: intercepts all existing twiml.message() calls without modifying conversation branches
   const outboundReplies = [];
@@ -389,9 +469,7 @@ async function handleTwilioWebhook(req, res) {
       await sessionRef.delete();
       twiml.message("Session reset. Send 'hey' to start again.");
       await flushOutboundReplies();
-      console.log("[Twilio] Webhook handler completed");
-      res.set("Content-Type", "text/xml");
-      return res.status(200).send("<Response></Response>");
+      return;
     }
 
     if (sessionData.step === "start") {
@@ -447,13 +525,13 @@ async function handleTwilioWebhook(req, res) {
         const activePoints = [];
         activePointsSnap.forEach(doc => activePoints.push(doc.data()));
         
-        const reply = await askNagarNetra_AI(req.body.Body, activePoints);
+        const reply = await askNagarNetra_AI(rawBody, activePoints);
         twiml.message(reply);
       }
     }
 
     else if (sessionData.step === "awaiting_tracking_code") {
-      const code = req.body.Body ? req.body.Body.toUpperCase().trim() : "";
+      const code = rawBody ? rawBody.toUpperCase().trim() : "";
       if (/^(NGN|SWC)-\d{4}$/.test(code)) {
         const snapshot = await db.collection("dumpPoints").where("report_id", "==", code).limit(1).get();
         if (snapshot.empty) {
@@ -506,8 +584,7 @@ async function handleTwilioWebhook(req, res) {
         if (!isWithinLucknow(lat, lng)) {
           twiml.message(t.location_outside_bounds);
           await flushOutboundReplies();
-          res.set("Content-Type", "text/xml");
-          return res.status(200).send("<Response></Response>");
+          return;
         }
 
         const timestamp = new Date().toISOString();
@@ -644,19 +721,99 @@ async function handleTwilioWebhook(req, res) {
     }
 
   } catch (error) {
-    console.error("[Twilio] Webhook error:", error.message || "Unknown error");
-    console.error("Error processing WhatsApp message:", error);
+    console.error("Error processing NagarNetra message:", error);
     twiml.message("Sorry, something went wrong on our end. Please try again later.");
   }
 
   await flushOutboundReplies();
-  console.log("[Twilio] Webhook handler completed");
-  res.set("Content-Type", "text/xml");
-  res.status(200).send("<Response></Response>");
+}
+
+// Telegram Inbound Webhook Handler
+async function handleTelegramWebhook(req, res) {
+  const update = req.body;
+  if (!update) {
+    return res.status(200).json({ ok: true });
+  }
+
+  const message = update.message || update.edited_message;
+  if (!message) {
+    return res.status(200).json({ ok: true });
+  }
+
+  const chatId = message.chat?.id;
+  if (!chatId) {
+    return res.status(200).json({ ok: true });
+  }
+
+  console.log("[Telegram] Incoming message");
+  console.log(`[Telegram] Chat ID: ${chatId}`);
+
+  let mediaUrl = null;
+  if (message.photo && message.photo.length > 0) {
+    const largestPhoto = message.photo[message.photo.length - 1];
+    mediaUrl = await getTelegramFileUrl(largestPhoto.file_id);
+  }
+
+  const normalizedPayload = {
+    From: `telegram:${chatId}`,
+    Body: message.text || message.caption || "",
+    NumMedia: mediaUrl ? "1" : "0",
+    MediaUrl0: mediaUrl,
+    Latitude: message.location ? message.location.latitude : null,
+    Longitude: message.location ? message.location.longitude : null,
+  };
+
+  console.log(`[Telegram] Body: "${normalizedPayload.Body}"`);
+  console.log("[Telegram] Processing started");
+
+  try {
+    await executeNagarNetraConversation(normalizedPayload);
+    console.log("[Telegram] Processing completed");
+  } catch (err) {
+    console.error("[Telegram] Processing error:", err.message || err);
+  }
+
+  return res.status(200).json({ ok: true });
 }
 
 app.post("/webhook/twilio", handleTwilioWebhook);
 app.post("/twilioWebhook", handleTwilioWebhook);
+app.post("/webhook/telegram", handleTelegramWebhook);
+
+// Telegram Health Probe Endpoint
+app.get("/telegram/health", (req, res) => {
+  const isConfigured = Boolean((process.env.TELEGRAM_BOT_TOKEN || "").trim());
+  res.status(200).json({
+    ok: true,
+    service: "NagarNetra Telegram Integration",
+    telegramConfigured: isConfigured,
+  });
+});
+
+// Telegram Webhook Registration Helper
+app.all("/api/telegram/set-webhook", async (req, res) => {
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!token) {
+    return res.status(400).json({ ok: false, error: "TELEGRAM_BOT_TOKEN is not configured" });
+  }
+
+  const webhookUrl = "https://nagarnetra-74tc.onrender.com/webhook/telegram";
+  try {
+    const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl }),
+    });
+    const tgData = await tgRes.json().catch(() => ({}));
+    return res.status(tgRes.status).json({
+      ok: tgData.ok || false,
+      telegramResponse: tgData,
+      registeredUrl: webhookUrl,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 // Feedback Survey Dispatcher Endpoint
 async function handleSendFeedbackSurvey(req, res) {
@@ -731,6 +888,11 @@ app.listen(PORT, () => {
   const missing = requiredEnv.filter(key => !process.env[key]);
   if (missing.length > 0) {
     console.warn(`[Config Warning] Missing production environment variables: ${missing.join(", ")}`);
+  }
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    console.log("[Server] Telegram Bot channel: ENABLED");
+  } else {
+    console.log("[Server] Telegram Bot channel: NOT CONFIGURED (TELEGRAM_BOT_TOKEN missing)");
   }
 });
 
