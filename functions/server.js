@@ -170,7 +170,7 @@ async function sendTelegramMessage(chatId, text, options = {}) {
       return { success: false, error: data.description || "Telegram API error" };
     }
 
-    console.log(`[Telegram] Reply sent to Chat ID: ${chatId}`);
+    console.log(`[Telegram] Reply sent to Chat ID: ${chatId} | HTTP: ${response.status} | message_id: ${data.result?.message_id}`);
     return { success: true, message_id: data.result?.message_id };
   } catch (err) {
     console.error("[Telegram] Network error sending message:", {
@@ -336,15 +336,15 @@ async function askNagarNetra_AI(query, activePoints = [], chatHistory = []) {
       }
     }
 
-    contents.push({ role: 'user', parts: [{ text: query }] });
-
+    console.log("[AI] Invoking Gemini model: gemini-3.6-flash");
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents
     });
     return response.text;
   } catch (error) {
     console.error("AI Error:", error.message || error);
+    console.error(error?.stack);
     return "Sorry, I am having trouble understanding right now. Please try again later.";
   }
 }
@@ -375,7 +375,7 @@ async function checkIsGarbage(mediaUrl) {
 
         const mimeType = imgRes.headers.get("content-type") || "image/jpeg";
         const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.6-flash',
           contents: [
             "Does this image clearly contain a garbage dump, litter, or scattered waste? Answer only YES or NO.",
             { inlineData: { data: buffer.toString("base64"), mimeType } }
@@ -458,11 +458,16 @@ async function executeNagarNetraConversation(payload) {
   const lat = payload.Latitude ? parseFloat(payload.Latitude) : null;
   const lng = payload.Longitude ? parseFloat(payload.Longitude) : null;
 
-  const twiml = new MessagingResponse();
-  const sessionCollection = fromNumber.startsWith("telegram:") ? "telegram_sessions" : "whatsapp_sessions";
-  const sessionDocId = fromNumber.startsWith("telegram:") ? fromNumber.replace("telegram:", "") : fromNumber;
+  const isTelegram = fromNumber.startsWith("telegram:");
+  const sessionCollection = isTelegram ? "telegram_sessions" : "whatsapp_sessions";
+  const sessionDocId = isTelegram ? fromNumber.replace("telegram:", "") : fromNumber;
   const sessionRef = db.collection(sessionCollection).doc(sessionDocId);
 
+  console.log(`[Conversation] Destination: ${fromNumber} | Channel: ${isTelegram ? "Telegram" : "WhatsApp"}`);
+  console.log(`[Conversation] Session document path: ${sessionCollection}/${sessionDocId}`);
+  console.log(`[Conversation] Normalized message text: "${incomingMsg}"`);
+
+  const twiml = new MessagingResponse();
   // Reply collector: intercepts all existing twiml.message() calls without modifying conversation branches
   const outboundReplies = [];
   twiml.message = function (text) {
@@ -473,32 +478,51 @@ async function executeNagarNetraConversation(payload) {
 
   async function flushOutboundReplies() {
     for (const reply of outboundReplies) {
+      console.log(`[Conversation] Final response text (${reply.length} chars): "${reply.slice(0, 100).replace(/\n/g, ' ')}..."`);
       await sendNagarNetraReply(fromNumber, reply);
     }
     outboundReplies.length = 0; // Prevent duplicate sending
   }
 
   try {
-    const sessionDoc = await sessionRef.get();
-    let sessionData = sessionDoc.exists ? sessionDoc.data() : { step: "start" };
+    // 1. DETERMINISTIC GREETING HANDLING (Bypasses AI/RAG and any previous stuck state)
+    const isGreeting = ["hey", "hi", "hello", "start", "/start", "namaste", "restart"].includes(incomingMsg);
+    if (isGreeting) {
+      console.log(`[Conversation] Detected intent: GREETING ("${rawBody}"). Deterministic welcome flow triggered. AI bypassed.`);
+      await sessionRef.set({ step: "awaiting_language", phone: fromNumber });
+      twiml.message("Please choose your language / कृपया अपनी भाषा चुनें:\n1️⃣ English\n2️⃣ हिंदी (Hindi)");
+      await flushOutboundReplies();
+      return;
+    }
 
-    const lang = sessionData.language || "en";
-    const t = translations[lang];
-
+    // 2. DETERMINISTIC RESET HANDLING
     if (incomingMsg === "reset" || incomingMsg === "cancel") {
+      console.log(`[Conversation] Detected intent: RESET ("${rawBody}"). Session document cleared.`);
       await sessionRef.delete();
       twiml.message("Session reset. Send 'hey' to start again.");
       await flushOutboundReplies();
       return;
     }
 
+    // 3. FIRESTORE SESSION LOOKUP
+    let sessionDoc;
+    try {
+      sessionDoc = await sessionRef.get();
+      console.log(`[Conversation] Firestore read succeeded. Session exists: ${sessionDoc.exists}`);
+    } catch (readErr) {
+      console.error("[Conversation] Firestore session read failed:", readErr.message);
+      throw readErr;
+    }
+
+    let sessionData = sessionDoc.exists ? sessionDoc.data() : { step: "start" };
+    console.log(`[Conversation] Current session state: "${sessionData.step}"`);
+
+    const lang = sessionData.language || "en";
+    const t = translations[lang] || translations.en;
+
     if (sessionData.step === "start") {
-      if (["hey", "hi", "hello", "start", "namaste"].includes(incomingMsg)) {
-        await sessionRef.set({ step: "awaiting_language", phone: fromNumber });
-        twiml.message("Please choose your language / कृपया अपनी भाषा चुनें:\n1️⃣ English\n2️⃣ हिंदी (Hindi)");
-      } else {
-        twiml.message("Welcome to NagarNetra! Reply with 'hey' to get started.");
-      }
+      console.log("[Conversation] Step is start. Prompting user to send 'hey'.");
+      twiml.message("Welcome to NagarNetra! Reply with 'hey' to get started.");
     }
     
     else if (sessionData.step === "awaiting_language") {
@@ -742,7 +766,8 @@ async function executeNagarNetraConversation(payload) {
     }
 
   } catch (error) {
-    console.error("Error processing NagarNetra message:", error);
+    console.error("[Conversation] Error processing message:", error?.message || error);
+    console.error("[Conversation] Error stack:", error?.stack);
     twiml.message("Sorry, something went wrong on our end. Please try again later.");
   }
 
@@ -766,7 +791,7 @@ async function handleTelegramWebhook(req, res) {
     return res.status(200).json({ ok: true });
   }
 
-  console.log("[Telegram] Incoming message");
+  console.log("[Telegram] Incoming message received");
   console.log(`[Telegram] Chat ID: ${chatId}`);
 
   let mediaUrl = null;
@@ -791,7 +816,8 @@ async function handleTelegramWebhook(req, res) {
     await executeNagarNetraConversation(normalizedPayload);
     console.log("[Telegram] Processing completed");
   } catch (err) {
-    console.error("[Telegram] Processing error:", err.message || err);
+    console.error("[Telegram] Conversation error:", err?.message || err);
+    console.error("[Telegram] Conversation stack:", err?.stack);
   }
 
   return res.status(200).json({ ok: true });
