@@ -9,7 +9,7 @@ import { db, auth } from "./services/firebase";
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 
-const TODAY = new Date("2026-07-06T00:00:00+05:30");
+const TODAY = new Date();
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -50,10 +50,12 @@ export default function App() {
 
   const points = useMemo(() => {
     return [...MOCK_POINTS, ...fbPoints].map(p => {
+      const safeReportId = p.report_id || p.community_id || p.id;
+      const patched = { ...p, report_id: safeReportId };
       if (resolvedOverrides[p.id]) {
-        return { ...p, status: "resolved", resolved_at: resolvedOverrides[p.id] };
+        return { ...patched, status: "resolved", resolved_at: resolvedOverrides[p.id] };
       }
-      return p;
+      return patched;
     });
   }, [fbPoints, resolvedOverrides]);
 
@@ -72,13 +74,21 @@ export default function App() {
 
   // Subscribe to Firebase if configured
   useEffect(() => {
-    if (!db) return; // Fallback to mock data if Firebase isn't set up
+    if (!db) {
+      console.warn("[Dashboard] Firebase Firestore not initialized. Using mock data.");
+      return;
+    }
 
-    console.log("Listening to Firestore dumpPoints...");
+    console.log("[Dashboard] Firebase initialized");
+    console.log("[Dashboard] Firestore project: nagarnetra-4a55d");
+    console.log("[Dashboard] dumpPoints listener attached");
     
     const unsubPoints = onSnapshot(collection(db, "dumpPoints"), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`[Dashboard] dumpPoints received: ${data.length}`);
       setFbPoints(data);
+    }, (err) => {
+      console.warn("[Dashboard] dumpPoints listener error:", err.message);
     });
 
     let unsubReports = () => {};
@@ -86,16 +96,17 @@ export default function App() {
 
     // Only subscribe to private PII collections (reports & feedback) if authenticated as Admin
     if (user) {
-      console.log("Authenticated Admin: Subscribing to reports & feedback...");
+      console.log("[Dashboard] reports listener attached");
       unsubReports = onSnapshot(collection(db, "reports"), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log(`[Dashboard] reports received: ${data.length}`);
         setReports([...MOCK_REPORTS, ...data]);
-      }, (err) => console.warn("Reports listener permission notice:", err.message));
+      }, (err) => console.warn("[Dashboard] reports listener permission notice:", err.message));
 
       unsubFeedback = onSnapshot(collection(db, "feedback"), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setFeedbacks([...MOCK_FEEDBACKS, ...data]);
-      }, (err) => console.warn("Feedback listener permission notice:", err.message));
+      }, (err) => console.warn("[Dashboard] feedback listener permission notice:", err.message));
     }
 
     return () => {
@@ -172,7 +183,11 @@ export default function App() {
     if (timeFilter === "7d") timeLimit = new Date(TODAY.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const fPoints = points.filter(p => {
-      if (timeLimit && new Date(p.last_reported) < timeLimit) return false;
+      if (timeLimit) {
+        if (!p.last_reported) return false;
+        const reportedDate = new Date(p.last_reported);
+        if (isNaN(reportedDate.getTime()) || reportedDate < timeLimit) return false;
+      }
       if (severityFilter === "high" && p.report_count < 7) return false;
       if (severityFilter === "med" && (p.report_count < 3 || p.report_count >= 7)) return false;
       if (severityFilter === "low" && p.report_count >= 3) return false;
@@ -180,7 +195,11 @@ export default function App() {
     });
 
     const fReports = reports.filter(r => {
-      if (timeLimit && new Date(r.timestamp) < timeLimit) return false;
+      if (timeLimit) {
+        if (!r.timestamp) return false;
+        const reportDate = new Date(r.timestamp);
+        if (isNaN(reportDate.getTime()) || reportDate < timeLimit) return false;
+      }
       if (severityFilter !== "all") {
         if (!r.matched_point_id) return false;
         const linkedPoint = points.find(dp => dp.id === r.matched_point_id);
@@ -199,16 +218,19 @@ export default function App() {
   // 2. Compute dynamic stats
   const dynamicStats = useMemo(() => {
     const activePoints = filteredPoints.filter(d => d.status === "active").length;
-    const newToday = filteredPoints.filter(d => d.last_reported === "2026-07-06").length;
+    const todayStr = TODAY.toISOString().split("T")[0];
+    const newToday = filteredPoints.filter(d => d.last_reported && d.last_reported.startsWith(todayStr)).length;
     
-    const weekAgo = new Date("2026-06-30T00:00:00+05:30");
-    const reportsThisWeek = filteredReports.filter(r => new Date(r.timestamp) >= weekAgo).length;
+    const weekAgo = new Date(TODAY.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const reportsThisWeek = filteredReports.filter(r => r.timestamp && new Date(r.timestamp) >= weekAgo).length;
     
     let avgDaysActive = 0;
     if (filteredPoints.length > 0) {
       avgDaysActive = Math.round(
         filteredPoints.reduce((sum, d) => {
-          return sum + ((new Date(d.last_reported) - new Date(d.first_reported)) / (1000 * 60 * 60 * 24));
+          const first = d.first_reported ? new Date(d.first_reported) : TODAY;
+          const last = d.last_reported ? new Date(d.last_reported) : TODAY;
+          return sum + ((last - first) / (1000 * 60 * 60 * 24));
         }, 0) / filteredPoints.length
       );
     }

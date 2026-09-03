@@ -108,17 +108,19 @@ export default function ClusterLayer({ dumpPoints, onPointClick }) {
   }, [map]);
 
   const points = useMemo(() => {
-    return dumpPoints.map(pt => ({
-      type: "Feature",
-      properties: {
-        cluster: false,
-        ptId: pt.id,
-        point: pt,
-        report_count: pt.report_count,
-        status: pt.status,
-      },
-      geometry: { type: "Point", coordinates: [pt.lng, pt.lat] }
-    }));
+    return (dumpPoints || [])
+      .filter(pt => pt && typeof pt.lat === "number" && !isNaN(pt.lat) && typeof pt.lng === "number" && !isNaN(pt.lng))
+      .map(pt => ({
+        type: "Feature",
+        properties: {
+          cluster: false,
+          ptId: pt.id,
+          point: pt,
+          report_count: pt.report_count || 1,
+          status: pt.status || "active",
+        },
+        geometry: { type: "Point", coordinates: [pt.lng, pt.lat] }
+      }));
   }, [dumpPoints]);
 
   const superclusterOptions = useMemo(() => ({

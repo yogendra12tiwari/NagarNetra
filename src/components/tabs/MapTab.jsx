@@ -23,8 +23,11 @@ function FitBounds({ points }) {
   const map = useMap();
   const fitted = useRef(false);
   useEffect(() => {
-    if (!fitted.current && points.length) {
-      map.fitBounds(points.map((p) => [p.lat, p.lng]), { padding: [48, 48] });
+    const validPoints = (points || []).filter(
+      (p) => p && typeof p.lat === "number" && !isNaN(p.lat) && typeof p.lng === "number" && !isNaN(p.lng)
+    );
+    if (!fitted.current && validPoints.length) {
+      map.fitBounds(validPoints.map((p) => [p.lat, p.lng]), { padding: [48, 48] });
       fitted.current = true;
     }
   }, [map, points]);
@@ -54,7 +57,7 @@ export default function MapTab({ dumpPoints, reports = [], isPublic = false }) {
                 key={report.id} 
                 onClick={() => {
                   const point = dumpPoints.find(p => p.id === report.matched_point_id);
-                  if (point) {
+                  if (point && typeof point.lat === "number" && typeof point.lng === "number") {
                     setSelected(point);
                     setViewMode("pins");
                     if (map) {

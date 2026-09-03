@@ -33,11 +33,16 @@ export default function PublicRagChat({ points }) {
     setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
     setIsLoading(true);
 
-    const chatHistory = messages.filter(m => !m.text.includes('NagarNetra AI Assistant'));
-    const responseText = await askRagAgent(userMessage, chatHistory, points);
-
-    setMessages(prev => [...prev, { role: 'model', text: responseText }]);
-    setIsLoading(false);
+    try {
+      const chatHistory = messages.filter(m => !m.text.includes('NagarNetra AI Assistant'));
+      const responseText = await askRagAgent(userMessage, chatHistory, points);
+      setMessages(prev => [...prev, { role: 'model', text: responseText }]);
+    } catch (err) {
+      console.error("[PublicRagChat] Error:", err.message);
+      setMessages(prev => [...prev, { role: 'model', text: "Sorry, I am having trouble fetching official details right now. Please try again later." }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSend = (e) => {

@@ -26,8 +26,13 @@ app.use(cors({
     } else {
       callback(new Error("Not allowed by CORS"));
     }
-  }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
 }));
+
+app.options("*", cors());
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -265,15 +270,23 @@ function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// AI RAG Assistant over WhatsApp
-async function askNagarNetra_AI(query, activePoints) {
+// AI RAG Assistant over WhatsApp & Web
+async function askNagarNetra_AI(query, activePoints = [], chatHistory = []) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return "AI service is currently unavailable.";
   
   const ai = new GoogleGenAI({ apiKey });
   
+  const safePoints = (Array.isArray(activePoints) ? activePoints : []).map(p => ({ 
+    id: p.report_id || p.community_id || p.id || "N/A", 
+    name: p.name || "Dump Point", 
+    reports: p.report_count || 1, 
+    status: p.status || "active", 
+    severity: (p.report_count || 1) >= 7 ? 'High' : 'Normal' 
+  }));
+
   const staticContext = `
-    You are the NagarNetra Public Information AI, answering users over WhatsApp.
+    You are the NagarNetra Public Information AI, answering citizens about Lucknow sanitation and civic cleanliness.
     
     STRICT GUARDRAILS:
     1. You must ONLY answer questions related to:
@@ -298,33 +311,40 @@ async function askNagarNetra_AI(query, activePoints) {
     - Chowk Ward: Corporator - Mr. Tariq Ansari, Phone - 9876543214
 
     Current Live Active Points (Hotspots) Context:
-    ${JSON.stringify(activePoints.map(p => ({ 
-      id: p.report_id, 
-      name: p.name, 
-      reports: p.report_count, 
-      status: p.status, 
-      severity: p.report_count >= 7 ? 'High' : 'Normal' 
-    })))}
+    ${JSON.stringify(safePoints)}
 
     Instructions:
-    - Provide detailed, well-explained responses.
-    - Use WhatsApp formatting: *bold* for emphasis, _italics_. Use bullet points (-) for readability. Do NOT use ** for bold.
-    - If the user provides a complaint number (e.g., SWC-0001), look it up in the context provided.
+    - Provide helpful, well-explained responses with clear formatting and bullet points where helpful.
+    - If the user provides a complaint number (e.g., SWC-0001, NGN-0001), look it up in the context provided.
     - If the user asks about an area not in the "Current Live Active Points" list, politely inform them that there are no active reported hotspots there.
   `;
 
   try {
+    const contents = [
+      { role: 'user', parts: [{ text: staticContext }] },
+      { role: 'model', parts: [{ text: "Understood. I am ready to assist citizens." }] }
+    ];
+
+    if (Array.isArray(chatHistory)) {
+      for (const msg of chatHistory) {
+        if (msg && msg.text) {
+          contents.push({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: String(msg.text) }]
+          });
+        }
+      }
+    }
+
+    contents.push({ role: 'user', parts: [{ text: query }] });
+
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: [
-        { role: 'user', parts: [{ text: staticContext }] },
-        { role: 'model', parts: [{ text: "Understood. I am ready to assist citizens." }] },
-        { role: 'user', parts: [{ text: query }] }
-      ]
+      contents
     });
     return response.text;
   } catch (error) {
-    console.error("AI Error:", error);
+    console.error("AI Error:", error.message || error);
     return "Sorry, I am having trouble understanding right now. Please try again later.";
   }
 }
@@ -632,6 +652,7 @@ async function executeNagarNetraConversation(payload) {
           const communityId = await generateCommunityId();
           const newPointRef = await db.collection("dumpPoints").add({
             community_id: communityId,
+            report_id: reportId,
             name: "User Reported Dump Point",
             lat,
             lng,
@@ -812,6 +833,36 @@ app.all("/api/telegram/set-webhook", async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// AI RAG Chat Endpoint for Web Dashboard
+app.post("/api/ai/chat", async (req, res) => {
+  try {
+    const { query, chatHistory, points } = req.body || {};
+    if (!query || typeof query !== "string" || !query.trim()) {
+      return res.status(400).json({ ok: false, error: "Query is required" });
+    }
+
+    let activePoints = Array.isArray(points) && points.length > 0 ? points : [];
+    if (activePoints.length === 0) {
+      try {
+        const snap = await db.collection("dumpPoints").where("status", "==", "active").limit(50).get();
+        snap.forEach(doc => activePoints.push({ id: doc.id, ...doc.data() }));
+      } catch (dbErr) {
+        console.warn("[AI Chat] Could not fetch live dumpPoints from Firestore:", dbErr.message);
+      }
+    }
+
+    const text = await askNagarNetra_AI(query.trim(), activePoints, chatHistory);
+    return res.status(200).json({ ok: true, text });
+  } catch (err) {
+    console.error("[AI Chat] Error processing chat request:", err.message);
+    return res.status(500).json({
+      ok: false,
+      error: "Internal Server Error",
+      text: "I'm sorry, I encountered an error while processing your request. Please try again later."
+    });
   }
 });
 
