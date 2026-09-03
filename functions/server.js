@@ -109,12 +109,73 @@ async function generateCommunityId() {
   return `COM-${String(result).padStart(4, "0")}`;
 }
 
-async function sendWhatsApp(to, body) {
-  return getTwilioClient().messages.create({
+async function sendWhatsApp(to, body, options = {}) {
+  const params = {
     from: getFromNumber(),
     to,
-    body,
-  });
+  };
+
+  if (options.contentSid) {
+    params.contentSid = options.contentSid;
+    if (options.contentVariables) {
+      params.contentVariables = typeof options.contentVariables === "string"
+        ? options.contentVariables
+        : JSON.stringify(options.contentVariables);
+    }
+  } else {
+    params.body = body;
+  }
+
+  return getTwilioClient().messages.create(params);
+}
+
+async function sendNagarNetraReply(to, text, options = {}) {
+  const mode = (process.env.WHATSAPP_MODE || "trial").toLowerCase().trim();
+
+  if (mode === "trial") {
+    // In trial mode: DO NOT send arbitrary dynamic text through Appointment Reminders ContentSid.
+    // Log dynamic reply clearly to Render application logs for evaluation and testing.
+    console.log(`[NagarNetra Reply][TRIAL MODE]\nTo: ${to}\nMessage: ${text}`);
+
+    if (options.useTrialContentSid && options.trialContentSid) {
+      try {
+        await sendWhatsApp(to, null, {
+          contentSid: options.trialContentSid,
+          contentVariables: options.contentVariables || {}
+        });
+      } catch (err) {
+        console.error("[Twilio] Outbound trial template error:", {
+          code: err.code || "N/A",
+          message: err.message || "Unknown error",
+          to
+        });
+      }
+    }
+    return { success: true, mode: "trial" };
+  }
+
+  // Production mode:
+  try {
+    const contentSid = options.contentSid || (process.env.TWILIO_CONTENT_SID || "").trim();
+    if (contentSid) {
+      const contentVariables = options.contentVariables || { "1": text };
+      const msg = await sendWhatsApp(to, null, {
+        contentSid,
+        contentVariables
+      });
+      return { success: true, sid: msg.sid };
+    } else {
+      const msg = await sendWhatsApp(to, text);
+      return { success: true, sid: msg.sid };
+    }
+  } catch (err) {
+    console.error("[Twilio] Outbound reply error:", {
+      code: err.code || "N/A",
+      message: err.message || "Unknown error",
+      to
+    });
+    return { success: false, error: err.message };
+  }
 }
 
 // Geo-Fencing
@@ -302,6 +363,21 @@ async function handleTwilioWebhook(req, res) {
   const twiml = new MessagingResponse();
   const sessionRef = db.collection("whatsapp_sessions").doc(fromNumber);
 
+  // Reply collector: intercepts all existing twiml.message() calls without modifying conversation branches
+  const outboundReplies = [];
+  twiml.message = function (text) {
+    if (text) {
+      outboundReplies.push(String(text));
+    }
+  };
+
+  async function flushOutboundReplies() {
+    for (const reply of outboundReplies) {
+      await sendNagarNetraReply(fromNumber, reply);
+    }
+    outboundReplies.length = 0; // Prevent duplicate sending
+  }
+
   try {
     const sessionDoc = await sessionRef.get();
     let sessionData = sessionDoc.exists ? sessionDoc.data() : { step: "start" };
@@ -312,9 +388,10 @@ async function handleTwilioWebhook(req, res) {
     if (incomingMsg === "reset" || incomingMsg === "cancel") {
       await sessionRef.delete();
       twiml.message("Session reset. Send 'hey' to start again.");
+      await flushOutboundReplies();
       console.log("[Twilio] Webhook handler completed");
       res.set("Content-Type", "text/xml");
-      return res.status(200).send(twiml.toString());
+      return res.status(200).send("<Response></Response>");
     }
 
     if (sessionData.step === "start") {
@@ -428,8 +505,9 @@ async function handleTwilioWebhook(req, res) {
       if (lat && lng) {
         if (!isWithinLucknow(lat, lng)) {
           twiml.message(t.location_outside_bounds);
+          await flushOutboundReplies();
           res.set("Content-Type", "text/xml");
-          return res.status(200).send(twiml.toString());
+          return res.status(200).send("<Response></Response>");
         }
 
         const timestamp = new Date().toISOString();
@@ -571,9 +649,10 @@ async function handleTwilioWebhook(req, res) {
     twiml.message("Sorry, something went wrong on our end. Please try again later.");
   }
 
+  await flushOutboundReplies();
   console.log("[Twilio] Webhook handler completed");
   res.set("Content-Type", "text/xml");
-  res.status(200).send(twiml.toString());
+  res.status(200).send("<Response></Response>");
 }
 
 app.post("/webhook/twilio", handleTwilioWebhook);
