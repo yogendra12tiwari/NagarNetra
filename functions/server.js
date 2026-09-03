@@ -336,6 +336,23 @@ async function askNagarNetra_AI(query, activePoints = [], chatHistory = []) {
       }
     }
 
+    // Ensure the current user query is appended as the final user turn
+    const lastContent = contents[contents.length - 1];
+    if (!lastContent || lastContent.role !== 'user' || lastContent.parts?.[0]?.text !== query) {
+      contents.push({
+        role: 'user',
+        parts: [{ text: query }]
+      });
+    }
+
+    const finalTurn = contents[contents.length - 1];
+    console.log(`[AI DEBUG] query length: ${query.length}`);
+    console.log(`[AI DEBUG] contents length: ${contents.length}`);
+    console.log(`[AI DEBUG] final role: ${finalTurn.role}`);
+    console.log(`[AI DEBUG] final text preview: ${finalTurn.parts?.[0]?.text?.slice(0, 100)}`);
+    console.log("[AI DEBUG] model: gemini-3.6-flash");
+
+    console.log("[AI] Sending Gemini request with final user query");
     console.log("[AI] Invoking Gemini model: gemini-3.6-flash");
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
@@ -343,8 +360,8 @@ async function askNagarNetra_AI(query, activePoints = [], chatHistory = []) {
     });
     return response.text;
   } catch (error) {
-    console.error("AI Error:", error.message || error);
-    console.error(error?.stack);
+    console.error("[AI] Gemini request failed:", error?.message);
+    console.error("[AI] Gemini stack:", error?.stack);
     return "Sorry, I am having trouble understanding right now. Please try again later.";
   }
 }
@@ -565,6 +582,9 @@ async function executeNagarNetraConversation(payload) {
         await sessionRef.delete();
         twiml.message(t.ai_menu_returned);
       } else {
+        console.log("[Telegram AI] step: awaiting_ai_query");
+        console.log(`[Telegram AI] query received: "${rawBody ? rawBody.slice(0, 100) : ''}"`);
+        console.log("[Telegram AI] calling askNagarNetra_AI");
         const activePointsSnap = await db.collection("dumpPoints").where("status", "==", "active").get();
         const activePoints = [];
         activePointsSnap.forEach(doc => activePoints.push(doc.data()));
