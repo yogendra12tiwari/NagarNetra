@@ -260,11 +260,21 @@ app.get("/health", (req, res) => {
 
 // Twilio Signature Verification & Inbound Webhook Handler
 async function handleTwilioWebhook(req, res) {
+  console.log("[Twilio] Incoming webhook received", {
+    method: req.method,
+    path: req.originalUrl || req.path,
+    from: req.body?.From || "N/A",
+    to: req.body?.To || "N/A",
+    body: req.body?.Body !== undefined ? req.body.Body : "N/A",
+    messageSid: req.body?.MessageSid || "N/A"
+  });
+
   const twilioAuthToken = (process.env.TWILIO_AUTH_TOKEN || "").trim();
   const twilioSignature = req.headers["x-twilio-signature"];
   const protocol = req.headers["x-forwarded-proto"] || req.protocol;
   const url = process.env.TWILIO_WEBHOOK_URL || `${protocol}://${req.headers.host}${req.originalUrl}`;
   
+  console.log("[Twilio] Validating signature");
   if (twilioSignature && twilioAuthToken) {
     let isValid = twilio.validateRequest(twilioAuthToken, twilioSignature, url, req.body);
     if (!isValid) {
@@ -272,9 +282,16 @@ async function handleTwilioWebhook(req, res) {
       isValid = twilio.validateRequest(twilioAuthToken, twilioSignature, altUrl, req.body);
     }
     if (!isValid) {
+      console.warn("[Twilio] Signature validation failed");
       console.warn("Invalid Twilio signature received.");
+    } else {
+      console.log("[Twilio] Signature validation passed");
     }
+  } else {
+    console.warn("[Twilio] Signature validation failed (missing token or signature header)");
   }
+
+  console.log("[Twilio] Calling webhook handler");
 
   const fromNumber = req.body.From || "";
   const incomingMsg = req.body.Body ? req.body.Body.toLowerCase().trim() : "";
@@ -295,6 +312,7 @@ async function handleTwilioWebhook(req, res) {
     if (incomingMsg === "reset" || incomingMsg === "cancel") {
       await sessionRef.delete();
       twiml.message("Session reset. Send 'hey' to start again.");
+      console.log("[Twilio] Webhook handler completed");
       res.set("Content-Type", "text/xml");
       return res.status(200).send(twiml.toString());
     }
@@ -548,10 +566,12 @@ async function handleTwilioWebhook(req, res) {
     }
 
   } catch (error) {
+    console.error("[Twilio] Webhook error:", error.message || "Unknown error");
     console.error("Error processing WhatsApp message:", error);
     twiml.message("Sorry, something went wrong on our end. Please try again later.");
   }
 
+  console.log("[Twilio] Webhook handler completed");
   res.set("Content-Type", "text/xml");
   res.status(200).send(twiml.toString());
 }
@@ -620,6 +640,7 @@ app.use((err, req, res, _next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`NagarNetra Express Backend running on port ${PORT}`);
+  console.log("[Server] NagarNetra Express backend ready");
   
   // Safe Environment Variable Check (Names only, never values)
   const requiredEnv = [
