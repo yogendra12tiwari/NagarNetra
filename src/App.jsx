@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import SplashScreen from "./components/SplashScreen";
 import AdminPanel from "./pages/AdminPanel";
 import PublicDashboard from "./pages/PublicDashboard";
+import AdminLogin from "./components/AdminLogin";
 import { DUMP_POINTS as MOCK_POINTS, RAW_REPORTS as MOCK_REPORTS, TEAMS as INITIAL_TEAMS, MOCK_FEEDBACKS } from "./data/mockData";
 import { db, auth } from "./services/firebase";
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
@@ -357,7 +358,13 @@ export default function App() {
     />
   );
 
-  const adminElement = (
+  const adminElement = !user ? (
+    <AdminLogin
+      onLoginSuccess={(u) => setUser(u)}
+      onBypassLogin={() => setUser({ email: "admin@nagarnetra.gov.in" })}
+      onCancel={() => window.location.href = "/"}
+    />
+  ) : (
     <AdminPanel 
       dynamicStats={dynamicStats}
       timeFilter={timeFilter}
@@ -375,7 +382,7 @@ export default function App() {
       onResolve={handleResolve}
       resolvingIds={resolvingIds}
       feedbacks={feedbacks}
-      user={user || { email: "admin@nagarnetra.gov.in" }}
+      user={user}
       onLogout={handleLogout}
     />
   );

@@ -3,7 +3,7 @@ import { ShieldCheck, Lock, Mail, ArrowLeft, Loader2, AlertCircle } from "lucide
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../services/firebase";
 
-export default function AdminLogin({ onLoginSuccess, onCancel }) {
+export default function AdminLogin({ onLoginSuccess, onBypassLogin, onCancel }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -122,6 +122,14 @@ export default function AdminLogin({ onLoginSuccess, onCancel }) {
             ) : (
               <span>Log In to Command Center</span>
             )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onBypassLogin}
+            className="w-full py-3 px-4 bg-slate-700/70 hover:bg-slate-700 active:bg-slate-600/90 border border-slate-600/80 text-emerald-400 hover:text-emerald-300 text-sm font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer"
+          >
+            <span>🔓 Bypass Login</span>
           </button>
         </form>
 
