@@ -367,17 +367,25 @@ async function askNagarNetra_AI(query, activePoints = [], chatHistory = []) {
 }
 
 // AI Spam Filter & Duplicate Image Detector
+// AI Spam Filter & Duplicate Image Detector
 async function checkIsGarbage(mediaUrl) {
   let isGarbage = true;
   let hash = null;
   try {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
+    if (apiKey && mediaUrl) {
       const ai = new GoogleGenAI({ apiKey });
       const twilioSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
       const twilioToken = (process.env.TWILIO_AUTH_TOKEN || "").trim();
       const twilioAuth = Buffer.from(twilioSid + ":" + twilioToken).toString("base64");
-      const imgRes = await fetch(mediaUrl, { headers: { Authorization: `Basic ${twilioAuth}` } });
+      
+      // Only send Basic Auth to Twilio media endpoints; avoid sending to Telegram or external URLs
+      const headers = mediaUrl.includes("api.twilio.com")
+        ? { Authorization: `Basic ${twilioAuth}` }
+        : {};
+
+      console.log(`[AI Spam Filter] Downloading image from: ${mediaUrl.slice(0, 80)}...`);
+      const imgRes = await fetch(mediaUrl, { headers });
       if (imgRes.ok) {
         const arrayBuffer = await imgRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
@@ -387,32 +395,75 @@ async function checkIsGarbage(mediaUrl) {
         const hashDoc = await db.collection("photo_hashes").doc(hash).get();
         
         if (hashDoc.exists) {
+          console.log(`[AI Spam Filter] Duplicate photo hash detected: ${hash}`);
           return { isGarbage: false, isDuplicate: true };
         }
 
         const mimeType = imgRes.headers.get("content-type") || "image/jpeg";
+        const prompt = `You are the AI verification system for NagarNetra, a municipal waste and cleanliness reporting system.
+Your task is to determine whether an image is a legitimate civic report related to garbage, waste, debris, or cleanliness, OR if it is unrelated spam.
+
+ACCEPT as VALID (is_valid: true) if it shows ANY of the following:
+- Piles of garbage, trash heaps, scattered litter, plastic bags, discarded packaging, food waste, bottles, or refuse.
+- Overflowing dustbins, garbage bins, dumpsters, or open waste collection sites.
+- Sanitation workers, waste pickers, sweepers, or people handling, sorting, or cleaning waste.
+- Construction or demolition debris, rubble, discarded building materials, scrap piles.
+- Clogged dirty drains, contaminated ditches, or unsanitary street/civic conditions.
+
+REJECT as SPAM (is_valid: false) ONLY if the photo is completely unrelated (e.g., personal selfies, portraits without waste, clean cars on clean roads, clean indoor rooms, food on dining plates, screenshots, memes).
+
+Respond strictly in JSON format:
+{
+  "is_valid": true,
+  "reason": "short explanation"
+}`;
+
         const response = await ai.models.generateContent({
           model: 'gemini-3.6-flash',
           contents: [
-            "Does this image clearly contain a garbage dump, litter, or scattered waste? Answer only YES or NO.",
+            prompt,
             { inlineData: { data: buffer.toString("base64"), mimeType } }
-          ]
+          ],
+          config: { responseMimeType: 'application/json' }
         });
         
-        const answer = response.text.trim().toUpperCase();
-        if (answer.includes("NO") && !answer.includes("YES")) {
-          isGarbage = false;
-        } else {
-          // Valid garbage photo: save hash to prevent future duplicates
+        const rawText = response.text ? response.text.trim() : "";
+        console.log(`[AI Spam Filter] Gemini response: ${rawText}`);
+
+        try {
+          const parsed = JSON.parse(rawText);
+          if (parsed && typeof parsed.is_valid === "boolean") {
+            isGarbage = parsed.is_valid;
+          } else {
+            isGarbage = true;
+          }
+        } catch (jsonErr) {
+          const upper = rawText.toUpperCase();
+          if (upper.includes('"IS_VALID": FALSE') || (upper.includes("SPAM") && !upper.includes("VALID"))) {
+            isGarbage = false;
+          } else {
+            isGarbage = true;
+          }
+        }
+
+        if (isGarbage && hash) {
+          // Valid garbage photo: save hash to prevent future duplicate submissions
           await db.collection("photo_hashes").doc(hash).set({
             timestamp: new Date().toISOString()
           });
+          console.log(`[AI Spam Filter] Saved valid photo hash: ${hash}`);
         }
+      } else {
+        console.warn(`[AI Spam Filter] Image fetch failed with HTTP ${imgRes.status} ${imgRes.statusText}`);
       }
     }
   } catch (aiError) {
-    console.error("AI Filtering error:", aiError);
+    console.error("[AI Spam Filter] Error during verification:", aiError);
+    // In case of AI error, default to accepting to prevent blocking valid citizens
+    isGarbage = true;
   }
+
+  console.log(`[AI Spam Filter] Final classification: isGarbage=${isGarbage}`);
   return { isGarbage, isDuplicate: false };
 }
 
