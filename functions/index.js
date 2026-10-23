@@ -7,6 +7,8 @@ const translations = require("./translations");
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
+  "https://nagarnetra-road-safety.web.app",
+  "https://nagarnetra-road-safety.firebaseapp.com",
   "https://nagarnetra-4a55d.web.app",
   "https://nagarnetra-4a55d.firebaseapp.com",
   "https://swachhos101.web.app",

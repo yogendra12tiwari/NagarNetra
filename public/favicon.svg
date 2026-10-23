@@ -1,4 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" fill="#5b4aee"/>
-  <path d="M25 35 H75 M40 35 V27 C40 25.5 41.5 24 43 24 H57 C58.5 24 60 25.5 60 27 V35 M30 35 V74 C30 76.5 32 78.5 34.5 78.5 H65.5 C68 78.5 70 76.5 70 74 V35 M42 46 V65 M58 46 V65" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="26" fill="url(#g)"/>
+  <path d="M12 50 C24 26 40 18 50 18 C60 18 76 26 88 50 C76 74 60 82 50 82 C40 82 24 74 12 50 Z" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="50" cy="50" r="18" fill="white" fill-opacity="0.25" stroke="white" stroke-width="5"/>
+  <path d="M42 63 L48 46 H52 L58 63" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <line x1="50" y1="50" x2="50" y2="60" stroke="white" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="44" cy="38" r="3.5" fill="white"/>
 </svg>

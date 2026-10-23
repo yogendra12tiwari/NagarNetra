@@ -5,12 +5,30 @@ const twilio = require("twilio");
 const admin = require("firebase-admin");
 const { GoogleGenAI } = require("@google/genai");
 const translations = require("./translations");
+const path = require("path");
+const fs = require("fs");
+const {
+  handleTelegramWebhook: handleRoadHazardTelegramWebhook,
+  setTelegramWebhookHandler
+} = require("./telegramHazardBot");
+const { verifyAdminRequest, validateHazardUpdatePayload } = require("./adminAuth");
+const {
+  validateRepairPhotoInput,
+  storeRepairPhoto,
+  verifyRepairWithGemini,
+} = require("./repairVerificationService");
+const {
+  evaluateHazardSla,
+  summarizeSlaMetrics,
+} = require("./slaService");
 
 const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
+  "https://nagarnetra-road-safety.web.app",
+  "https://nagarnetra-road-safety.firebaseapp.com",
   "https://nagarnetra-4a55d.web.app",
   "https://nagarnetra-4a55d.firebaseapp.com",
   "https://swachhos101.web.app",
@@ -28,14 +46,14 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+  methods: ["GET", "POST", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Admin-Secret"]
 }));
 
 app.options("*", cors());
 
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use(express.json({ limit: "15mb" }));
 
 // Initialize Firebase Admin SDK for Render
 if (!admin.apps.length) {
@@ -46,19 +64,26 @@ if (!admin.apps.length) {
           ? process.env.FIREBASE_SERVICE_ACCOUNT_KEY
           : Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_KEY, "base64").toString("utf-8")
       );
+      const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
+      const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`;
       admin.initializeApp({
         credential: admin.credential.cert(sa),
-        projectId: process.env.FIREBASE_PROJECT_ID || "nagarnetra-4a55d"
+        projectId,
+        storageBucket
       });
     } catch (e) {
       console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY, using default admin init:", e.message);
+      const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
       admin.initializeApp({
-        projectId: process.env.FIREBASE_PROJECT_ID || "nagarnetra-4a55d"
+        projectId,
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`
       });
     }
   } else {
+    const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
     admin.initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID || "nagarnetra-4a55d"
+      projectId,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`
     });
   }
 }
@@ -867,93 +892,26 @@ async function executeNagarNetraConversation(payload) {
   await flushOutboundReplies();
 }
 
-// Telegram Inbound Webhook Handler
-async function handleTelegramWebhook(req, res) {
-  const update = req.body;
-  if (!update) {
-    return res.status(200).json({ ok: true });
-  }
-
-  const message = update.message || update.edited_message;
-  if (!message) {
-    return res.status(200).json({ ok: true });
-  }
-
-  const chatId = message.chat?.id;
-  if (!chatId) {
-    return res.status(200).json({ ok: true });
-  }
-
-  console.log("[Telegram] Incoming message received");
-  console.log(`[Telegram] Chat ID: ${chatId}`);
-
-  let mediaUrl = null;
-  if (message.photo && message.photo.length > 0) {
-    const largestPhoto = message.photo[message.photo.length - 1];
-    mediaUrl = await getTelegramFileUrl(largestPhoto.file_id);
-  }
-
-  const normalizedPayload = {
-    From: `telegram:${chatId}`,
-    Body: message.text || message.caption || "",
-    NumMedia: mediaUrl ? "1" : "0",
-    MediaUrl0: mediaUrl,
-    Latitude: message.location ? message.location.latitude : null,
-    Longitude: message.location ? message.location.longitude : null,
-  };
-
-  console.log(`[Telegram] Body: "${normalizedPayload.Body}"`);
-  console.log("[Telegram] Processing started");
-
-  try {
-    await executeNagarNetraConversation(normalizedPayload);
-    console.log("[Telegram] Processing completed");
-  } catch (err) {
-    console.error("[Telegram] Conversation error:", err?.message || err);
-    console.error("[Telegram] Conversation stack:", err?.stack);
-  }
-
-  return res.status(200).json({ ok: true });
-}
-
 app.post("/webhook/twilio", handleTwilioWebhook);
 app.post("/twilioWebhook", handleTwilioWebhook);
-app.post("/webhook/telegram", handleTelegramWebhook);
+
+// Primary Road Hazard Telegram Webhook
+app.post("/webhook/telegram", (req, res) => handleRoadHazardTelegramWebhook(req, res, db));
 
 // Telegram Health Probe Endpoint
 app.get("/telegram/health", (req, res) => {
   const isConfigured = Boolean((process.env.TELEGRAM_BOT_TOKEN || "").trim());
+  const hasSecret = Boolean((process.env.TELEGRAM_WEBHOOK_SECRET || "").trim());
   res.status(200).json({
     ok: true,
-    service: "NagarNetra Telegram Integration",
+    service: "SI-02 Road Hazard Telegram Integration",
     telegramConfigured: isConfigured,
+    secretTokenConfigured: hasSecret,
   });
 });
 
-// Telegram Webhook Registration Helper
-app.all("/api/telegram/set-webhook", async (req, res) => {
-  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
-  if (!token) {
-    return res.status(400).json({ ok: false, error: "TELEGRAM_BOT_TOKEN is not configured" });
-  }
-
-  const webhookUrl = "https://nagarnetra-74tc.onrender.com/webhook/telegram";
-  try {
-    const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl }),
-    });
-    const tgData = await tgRes.json().catch(() => ({}));
-    return res.status(tgRes.status).json({
-      ok: tgData.ok || false,
-      telegramResponse: tgData,
-      registeredUrl: webhookUrl,
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
+// Protected Telegram Webhook Registration Helper
+app.all("/api/telegram/set-webhook", setTelegramWebhookHandler);
 
 // AI RAG Chat Endpoint for Web Dashboard
 app.post("/api/ai/chat", async (req, res) => {
@@ -998,6 +956,384 @@ app.get("/api/reports", async (req, res) => {
     console.error("[API Reports] Error fetching reports:", err.message);
     return res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Live Road Hazards Endpoint for SI-02 Dashboard
+app.get("/api/hazards", async (req, res) => {
+  try {
+    const snapshot = await db.collection("hazards").orderBy("created_at", "desc").limit(100).get();
+    const hazards = [];
+    snapshot.forEach(doc => {
+      hazards.push({ id: doc.id, ...doc.data() });
+    });
+    return res.status(200).json({ ok: true, count: hazards.length, hazards });
+  } catch (err) {
+    console.error("[API Hazards] Error fetching hazards:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Update Road Hazard Status & Dispatch Endpoint for Dashboard (Admin Protected)
+app.patch("/api/hazards/:id/status", async (req, res) => {
+  try {
+    // 1. Verify administrator credentials (Bearer ID token or Admin Secret)
+    const authResult = await verifyAdminRequest(req, admin.auth());
+    if (!authResult.authorized) {
+      return res.status(authResult.status || 401).json({
+        ok: false,
+        error: authResult.error || "Unauthorized: Administrator privileges required"
+      });
+    }
+
+    const { id } = req.params;
+
+    // 2. Locate hazard by doc.id or ticket_id
+    let docRef = db.collection("hazards").doc(id);
+    let docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      const qSnap = await db.collection("hazards").where("ticket_id", "==", id).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({ ok: false, error: "Hazard not found" });
+      }
+    }
+
+    const currentHazard = docSnap.data();
+
+    // 3. Validate body fields, immutable field protection, and state machine transitions
+    const validation = validateHazardUpdatePayload(req.body, currentHazard);
+    if (!validation.valid) {
+      return res.status(400).json({
+        ok: false,
+        error: validation.error
+      });
+    }
+
+    // 4. Apply sanitized update
+    await docRef.update(validation.sanitized);
+    return res.status(200).json({
+      ok: true,
+      id: docRef.id,
+      ticket_id: currentHazard.ticket_id,
+      status: validation.sanitized.status || currentHazard.status,
+      updated_by: authResult.user?.uid || "admin"
+    });
+  } catch (err) {
+    console.error("[API Hazard Status] Error updating status:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── PHASE 4: Repair Verification Endpoint (Admin Protected) ──────────────────
+app.post("/api/hazards/:id/verify-repair", async (req, res) => {
+  try {
+    // 1. Verify administrator credentials
+    const authResult = await verifyAdminRequest(req, admin.auth());
+    if (!authResult.authorized) {
+      return res.status(authResult.status || 401).json({
+        ok: false,
+        error: authResult.error || "Unauthorized: Administrator privileges required"
+      });
+    }
+
+    const { id } = req.params;
+
+    // 2. Locate hazard document
+    let docRef = db.collection("hazards").doc(id);
+    let docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection("hazards").where("ticket_id", "==", id).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({ ok: false, error: "Hazard not found" });
+      }
+    }
+
+    const hazard = docSnap.data();
+
+    // 3. Validate submitted repair photo
+    const photoValidation = validateRepairPhotoInput(req.body);
+    if (!photoValidation.valid) {
+      return res.status(400).json({ ok: false, error: photoValidation.error });
+    }
+
+    // 4. Store repair photo safely
+    const storedPhotoUrl = await storeRepairPhoto(
+      photoValidation.buffer,
+      photoValidation.mimetype,
+      hazard.ticket_id,
+      admin
+    );
+
+    // 5. Compare with original before-photo using Gemini AI
+    const originalPhoto = hazard.photo_url || (Array.isArray(hazard.photos) && hazard.photos[0]);
+    let aiVerification = null;
+
+    if (originalPhoto) {
+      aiVerification = await verifyRepairWithGemini(
+        originalPhoto,
+        photoValidation.buffer,
+        hazard.hazard_type || hazard.category || "pothole_or_damaged_road",
+        {
+          repairMimeType: photoValidation.mimetype,
+          apiKey: process.env.GEMINI_API_KEY,
+          mockResult: req.body.mockResult || null,
+        }
+      );
+    } else {
+      aiVerification = {
+        verification_status: "uncertain",
+        confidence: 0.0,
+        explanation: "No original citizen photo on file for comparison. Inspector manual review required.",
+        needs_human_review: true,
+      };
+    }
+
+    const officerId = authResult.user?.email || authResult.user?.uid || "admin";
+    const nowIso = new Date().toISOString();
+
+    const auditEntry = {
+      action: "repair_photo_submitted",
+      by: officerId,
+      timestamp: nowIso,
+      verification_status: aiVerification.verification_status,
+      confidence: aiVerification.confidence,
+      notes: aiVerification.explanation,
+    };
+
+    const existingAudit = Array.isArray(hazard.verification_audit) ? hazard.verification_audit : [];
+
+    const updateData = {
+      repair_photo_url: storedPhotoUrl,
+      repair_submitted_at: nowIso,
+      repair_submitted_by: officerId,
+      verification_status: aiVerification.verification_status,
+      verification_confidence: aiVerification.confidence,
+      verification_explanation: aiVerification.explanation,
+      needs_human_review: aiVerification.needs_human_review,
+      verification_audit: [...existingAudit, auditEntry],
+      updated_at: nowIso,
+    };
+
+    // If verified with high confidence, optionally transition status to in_repair / resolved
+    if (aiVerification.verification_status === "verified" && req.body.auto_resolve !== false) {
+      updateData.status = "resolved";
+      updateData.resolved_at = nowIso;
+    }
+
+    await docRef.update(updateData);
+
+    return res.status(200).json({
+      ok: true,
+      ticket_id: hazard.ticket_id,
+      repair_photo_url: storedPhotoUrl,
+      verification_status: aiVerification.verification_status,
+      confidence: aiVerification.confidence,
+      explanation: aiVerification.explanation,
+      needs_human_review: aiVerification.needs_human_review,
+      status: updateData.status || hazard.status,
+    });
+  } catch (err) {
+    console.error("[API Verify Repair] Error verifying repair:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Manual Human Verification Override Endpoint (Admin Protected) ────────────
+app.post("/api/hazards/:id/manual-verify", async (req, res) => {
+  try {
+    const authResult = await verifyAdminRequest(req, admin.auth());
+    if (!authResult.authorized) {
+      return res.status(authResult.status || 401).json({
+        ok: false,
+        error: authResult.error || "Unauthorized: Administrator privileges required"
+      });
+    }
+
+    const { id } = req.params;
+    const { decision, notes } = req.body;
+
+    if (!decision || !["verified", "not_verified"].includes(decision)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid decision. Must be 'verified' or 'not_verified'."
+      });
+    }
+
+    let docRef = db.collection("hazards").doc(id);
+    let docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection("hazards").where("ticket_id", "==", id).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({ ok: false, error: "Hazard not found" });
+      }
+    }
+
+    const hazard = docSnap.data();
+    const officerId = authResult.user?.email || authResult.user?.uid || "admin";
+    const nowIso = new Date().toISOString();
+
+    const auditEntry = {
+      action: "manual_verification_override",
+      by: officerId,
+      timestamp: nowIso,
+      verification_status: decision,
+      notes: notes || `Manual decision by ${officerId}`,
+    };
+
+    const existingAudit = Array.isArray(hazard.verification_audit) ? hazard.verification_audit : [];
+
+    const updateData = {
+      verification_status: decision,
+      needs_human_review: false,
+      human_verified_by: officerId,
+      human_verified_at: nowIso,
+      verification_explanation: notes || `Manually verified as ${decision} by operator ${officerId}`,
+      verification_audit: [...existingAudit, auditEntry],
+      updated_at: nowIso,
+    };
+
+    if (decision === "verified") {
+      updateData.status = "resolved";
+      updateData.resolved_at = nowIso;
+    }
+
+    await docRef.update(updateData);
+
+    return res.status(200).json({
+      ok: true,
+      ticket_id: hazard.ticket_id,
+      verification_status: decision,
+      status: updateData.status || hazard.status,
+    });
+  } catch (err) {
+    console.error("[API Manual Verify] Error updating verification:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── SLA Metrics Summary & Batch Escalation Endpoints ─────────────────────────
+app.get("/api/sla/summary", async (_req, res) => {
+  try {
+    const snap = await db.collection("hazards").get();
+    const hazards = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const summary = summarizeSlaMetrics(hazards);
+    return res.status(200).json({ ok: true, summary });
+  } catch (err) {
+    console.error("[API SLA Summary] Error computing metrics:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/sla/evaluate", async (req, res) => {
+  try {
+    const authResult = await verifyAdminRequest(req, admin.auth());
+    if (!authResult.authorized) {
+      return res.status(authResult.status || 401).json({
+        ok: false,
+        error: authResult.error || "Unauthorized: Administrator privileges required"
+      });
+    }
+
+    const snap = await db.collection("hazards")
+      .where("status", "in", ["reported", "acknowledged", "dispatched", "in_repair"])
+      .get();
+
+    let updatedCount = 0;
+    const now = Date.now();
+
+    for (const doc of snap.docs) {
+      const hazard = doc.data();
+      const evalResult = evaluateHazardSla(hazard, now);
+
+      if (evalResult.escalation_events.length > 0) {
+        await doc.ref.update({
+          response_sla_status: evalResult.response_sla_status,
+          resolution_sla_status: evalResult.resolution_sla_status,
+          escalation_history: evalResult.all_escalations,
+          updated_at: new Date().toISOString(),
+        });
+        updatedCount++;
+      }
+    }
+
+    return res.status(200).json({
+      ok: true,
+      evaluated_count: snap.size,
+      escalated_count: updatedCount,
+    });
+  } catch (err) {
+    console.error("[API SLA Evaluate] Error running evaluation:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Cluster Inspection Endpoint ──────────────────────────────────────────────
+app.get("/api/hazards/:id/cluster", async (req, res) => {
+  try {
+    const { id } = req.params;
+    let docRef = db.collection("hazards").doc(id);
+    let docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection("hazards").where("ticket_id", "==", id).limit(1).get();
+      if (!qSnap.empty) {
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({ ok: false, error: "Hazard not found" });
+      }
+    }
+
+    const hazard = docSnap.data();
+    const clusterId = hazard.cluster_id || hazard.canonical_ticket_id || hazard.ticket_id;
+
+    const clusterSnap = await db.collection("hazards")
+      .where("cluster_id", "==", clusterId)
+      .get();
+
+    const linkedHazards = clusterSnap.docs.map(d => ({
+      id: d.id,
+      ticket_id: d.data().ticket_id,
+      lat: d.data().lat,
+      lng: d.data().lng,
+      created_at: d.data().created_at,
+      status: d.data().status,
+      is_canonical: d.data().is_canonical,
+      distance_to_canonical_meters: d.data().distance_to_canonical_meters || 0,
+      photo_url: d.data().photo_url,
+    }));
+
+    return res.status(200).json({
+      ok: true,
+      cluster_id: clusterId,
+      total_reports: linkedHazards.length,
+      reports: linkedHazards,
+    });
+  } catch (err) {
+    console.error("[API Hazard Cluster] Error fetching cluster:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Protected Photo Retrieval Route (Prevents Path Traversal) ────────────────
+app.get("/api/repairs/photos/:filename", (req, res) => {
+  const { filename } = req.params;
+  const safeFilename = path.basename(filename);
+  const uploadsDir = path.join(__dirname, "uploads", "repairs");
+  const filePath = path.join(uploadsDir, safeFilename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ ok: false, error: "Photo not found" });
+  }
+
+  return res.sendFile(filePath);
 });
 
 // Feedback Survey Dispatcher Endpoint

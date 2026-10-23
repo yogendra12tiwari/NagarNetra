@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Trash2, MessageCircle, Bot, BarChart2, Users, CheckCircle } from 'lucide-react';
+import { MessageCircle, Bot, BarChart2, Users, CheckCircle } from 'lucide-react';
+import NagarNetraLogo from './NagarNetraLogo';
 
 const steps = [
   { id: 1, icon: MessageCircle, label: 'WhatsApp Received', color: 'text-green-500', bg: 'bg-green-100' },
@@ -50,9 +51,7 @@ export default function SplashScreen({ onComplete }) {
       <div className="relative flex items-center justify-center w-[min(500px,92vw)] h-[min(500px,92vw)]">
         {/* Center Logo */}
         <div className="absolute z-10 flex flex-col items-center justify-center">
-          <div className="w-20 h-20 sm:w-24 sm:h-24 bg-indigo-600 rounded-3xl flex items-center justify-center shadow-2xl shadow-indigo-200 rotate-3 animate-pulse">
-            <Trash2 size={isCompact ? 38 : 48} className="text-white" />
-          </div>
+          <NagarNetraLogo size={isCompact ? 72 : 88} className="shadow-2xl shadow-indigo-300" />
           <h1 className="mt-5 sm:mt-6 text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">NagarNetra</h1>
           <p className="text-xs uppercase tracking-widest text-indigo-500 font-bold mt-1">Initializing...</p>
         </div>

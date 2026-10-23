@@ -3,30 +3,46 @@ import { useMap, Marker, Tooltip } from "react-leaflet";
 import L from "leaflet";
 import useSupercluster from "use-supercluster";
 
-// Accepts the full point object so we can check status
-function pinColor(point) {
-  if (point.status === "unmanaged") return "#a855f7"; // purple
-  if (point.report_count >= 7) return "#ef4444";      // red
-  if (point.report_count >= 3) return "#f97316";      // orange
-  return "#22c55e";                                   // green
+export function getHazardPinColor(hazard) {
+  if (!hazard) return "#eab308";
+  if (hazard.needs_human_review || hazard.hazard_type === "unrelated_or_uncertain") {
+    return "#a855f7"; // purple - review required
+  }
+  const score = typeof hazard.risk_score === "number" ? hazard.risk_score : 50;
+  if (score >= 75 || hazard.priority_label === "Critical" || hazard.severity_level === "critical") {
+    return "#ef4444"; // red - critical (75-100)
+  }
+  if (score >= 50 || hazard.priority_label === "High" || hazard.severity_level === "high") {
+    return "#f97316"; // orange - high (50-74)
+  }
+  if (score >= 25 || hazard.priority_label === "Medium" || hazard.severity_level === "medium") {
+    return "#eab308"; // amber - medium (25-49)
+  }
+  return "#22c55e"; // green - low (1-24)
+}
+
+function getPriorityBand(hazard) {
+  if (hazard.needs_human_review || hazard.hazard_type === "unrelated_or_uncertain") return "review";
+  const score = typeof hazard.risk_score === "number" ? hazard.risk_score : 50;
+  if (score >= 75 || hazard.priority_label === "Critical") return "critical";
+  if (score >= 50 || hazard.priority_label === "High") return "high";
+  if (score >= 25 || hazard.priority_label === "Medium") return "med";
+  return "low";
 }
 
 // ─── Minimal Pill Cluster ──────────────────────────────────────────────────────
-// A clean, highly readable pill shape inspired by Airbnb/Modern maps.
-// Shows a glowing dot for dominant severity + the total count.
 function createMinimalPillCluster(clusterCount, properties) {
-  const { red = 0, org = 0, grn = 0, prp = 0 } = properties;
+  const { red = 0, org = 0, amb = 0, prp = 0 } = properties;
 
-  // Determine dominant severity color (unmanaged purple takes priority)
+  // Determine dominant severity color (critical red and review purple get prominent highlighting)
   let dominantColor = "#22c55e";
-  if (prp > 0) dominantColor = "#a855f7";
-  else if (red > 0 && red >= org && red >= grn) dominantColor = "#ef4444";
-  else if (org > 0 && org >= grn) dominantColor = "#f97316";
+  if (red > 0) dominantColor = "#ef4444";
+  else if (org > 0) dominantColor = "#f97316";
+  else if (prp > 0) dominantColor = "#a855f7";
+  else if (amb > 0) dominantColor = "#eab308";
 
-  const text = clusterCount >= 1000 ? (clusterCount / 1000).toFixed(1) + 'k' : clusterCount;
-  
-  // Estimate width for centering: ~28px for padding + ~8px per character
-  const estimatedWidth = 32 + (text.toString().length * 8);
+  const text = clusterCount >= 1000 ? (clusterCount / 1000).toFixed(1) + "k" : clusterCount;
+  const estimatedWidth = 34 + (text.toString().length * 8);
 
   const html = `
     <div style="
@@ -41,17 +57,18 @@ function createMinimalPillCluster(clusterCount, properties) {
       gap: 6px;
       padding: 0 10px;
       pointer-events: auto;
+      cursor: pointer;
     ">
       <div style="
         width: 8px;
         height: 8px;
         border-radius: 50%;
         background-color: ${dominantColor};
-        box-shadow: 0 0 4px ${dominantColor};
+        box-shadow: 0 0 5px ${dominantColor};
       "></div>
       <span style="
         font-family: ui-sans-serif, system-ui, sans-serif;
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
         color: #111827;
         letter-spacing: -0.3px;
@@ -68,20 +85,25 @@ function createMinimalPillCluster(clusterCount, properties) {
   });
 }
 
-function createSingleIcon(point) {
-  const color = pinColor(point);
-  const isUnmanaged = point.status === "unmanaged";
-  const html = isUnmanaged
-    ? `<div class="nagarnetra-marker" style="--marker-color: ${color}; pointer-events: none;">
-        <div style="width:22px;height:22px;border-radius:50%;background:${color}22;border:2.5px solid ${color};display:flex;align-items:center;justify-content:center;pointer-events:none;">
-          <div style="width:10px;height:10px;border-radius:50%;background:${color};"></div>
-        </div>
-       </div>`
-    : `<div class="nagarnetra-marker" style="--marker-color: ${color}; pointer-events: none;">
-        <div class="nagarnetra-marker-pulse" style="pointer-events: none;"></div>
-        <div class="nagarnetra-marker-core" style="transform: scale(1.1); pointer-events: none;"></div>
-       </div>`;
-  return L.divIcon({ html, className: "custom-div-icon", iconSize: [24, 24], iconAnchor: [12, 12] });
+function createSingleIcon(hazard, isSelected = false) {
+  const color = getHazardPinColor(hazard);
+  const isReview = hazard.needs_human_review || hazard.hazard_type === "unrelated_or_uncertain";
+  const isCritical = (hazard.risk_score || 0) >= 75 || hazard.priority_label === "Critical";
+
+  const html = `
+    <div class="reference-map-pin ${isSelected ? 'reference-pin-selected' : ''}" style="--pin-color: ${color}; pointer-events: none;">
+      <div class="reference-pin-outer" style="background: ${color}35;"></div>
+      <div class="reference-pin-inner" style="background: ${color};">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </div>
+    </div>
+  `;
+
+  return L.divIcon({ html, className: "custom-div-icon", iconSize: [32, 32], iconAnchor: [16, 16] });
 }
 
 export default function ClusterLayer({ dumpPoints, onPointClick }) {
@@ -110,31 +132,38 @@ export default function ClusterLayer({ dumpPoints, onPointClick }) {
   const points = useMemo(() => {
     return (dumpPoints || [])
       .filter(pt => pt && typeof pt.lat === "number" && !isNaN(pt.lat) && typeof pt.lng === "number" && !isNaN(pt.lng))
-      .map(pt => ({
-        type: "Feature",
-        properties: {
-          cluster: false,
-          ptId: pt.id,
-          point: pt,
-          report_count: pt.report_count || 1,
-          status: pt.status || "active",
-        },
-        geometry: { type: "Point", coordinates: [pt.lng, pt.lat] }
-      }));
+      .map(pt => {
+        const priorityBand = getPriorityBand(pt);
+        return {
+          type: "Feature",
+          properties: {
+            cluster: false,
+            ptId: pt.ticket_id || pt.id,
+            point: pt,
+            priorityBand,
+            needs_review: Boolean(pt.needs_human_review),
+            report_count: pt.report_count || 1,
+            status: pt.status || "reported",
+          },
+          geometry: { type: "Point", coordinates: [pt.lng, pt.lat] }
+        };
+      });
   }, [dumpPoints]);
 
   const superclusterOptions = useMemo(() => ({
-    radius: 75,
+    radius: 70,
     maxZoom: 18,
     map: (props) => ({
-      red: props.report_count >= 7 && props.status !== "unmanaged" ? 1 : 0,
-      org: props.report_count >= 3 && props.report_count < 7 && props.status !== "unmanaged" ? 1 : 0,
-      grn: props.report_count < 3 && props.status !== "unmanaged" ? 1 : 0,
-      prp: props.status === "unmanaged" ? 1 : 0,
+      red: props.priorityBand === "critical" ? 1 : 0,
+      org: props.priorityBand === "high" ? 1 : 0,
+      amb: props.priorityBand === "med" ? 1 : 0,
+      grn: props.priorityBand === "low" ? 1 : 0,
+      prp: props.priorityBand === "review" ? 1 : 0,
     }),
     reduce: (acc, props) => {
       acc.red += props.red;
       acc.org += props.org;
+      acc.amb += props.amb;
       acc.grn += props.grn;
       acc.prp += props.prp;
     }
@@ -170,17 +199,28 @@ export default function ClusterLayer({ dumpPoints, onPointClick }) {
         }
 
         const pt = cluster.properties.point;
+        const ticketId = pt.ticket_id || pt.community_id || pt.id;
+        const categoryName = pt.category || pt.hazard_type || pt.name || "Road Hazard";
+        const riskScore = pt.risk_score ?? Math.min(99, (pt.report_count || 1) * 15);
+        const priorityLabel = pt.priority_label || (riskScore >= 75 ? "Critical" : riskScore >= 50 ? "High" : riskScore >= 25 ? "Medium" : "Low");
+
         return (
           <Marker
-            key={pt.id}
+            key={pt.id || ticketId}
             position={[latitude, longitude]}
             icon={createSingleIcon(pt)}
             eventHandlers={{ click: () => onPointClick(pt) }}
           >
-            <Tooltip direction="top" offset={[0, -4]} className="nagarnetra-tooltip">
-              <div style={{ fontFamily: "inherit" }}>
-                <div style={{ fontWeight: 600, fontSize: 12, color: "#1a202c" }}>{pt.name}</div>
-                <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{pt.report_count} reports</div>
+            <Tooltip direction="top" offset={[0, -6]} className="nagarnetra-tooltip">
+              <div style={{ fontFamily: "inherit", padding: "2px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                  <span style={{ fontWeight: 800, fontSize: "11px", color: "#4f46e5", fontFamily: "monospace" }}>{ticketId}</span>
+                  <span style={{ fontSize: "10px", fontWeight: 700, color: getHazardPinColor(pt) }}>{priorityLabel}</span>
+                </div>
+                <div style={{ fontWeight: 600, fontSize: "12px", color: "#111827", marginTop: "2px" }}>{categoryName}</div>
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                  Risk: <strong>{riskScore}/100</strong> • Status: {pt.status || "reported"}
+                </div>
               </div>
             </Tooltip>
           </Marker>

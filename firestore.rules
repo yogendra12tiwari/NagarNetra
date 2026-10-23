@@ -1,41 +1,161 @@
 rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model & Architecture
+// ===============================================================
+//
+// Application: SI-02 Road Hazard Reporting & Tracking System (NagarNetra)
+//
+// Collections:
+//
+// 1. /telegram_sessions/{session}
+//    - Session state storage for multi-step Telegram bot intake.
+//    - Private: Cloud Functions / Admin SDK only. Zero client access.
+//
+// 2. /whatsapp_sessions/{session}
+//    - Session state storage for WhatsApp bot intake.
+//    - Private: Cloud Functions / Admin SDK only. Zero client access.
+//
+// 3. /photo_hashes/{hash}
+//    - SHA-256 / dHash deduplication records for hazard photos.
+//    - Private: Backend Admin SDK only. Zero client access.
+//
+// 4. /meta/{document=**}
+//    - Global counters, geofence definitions, and system statistics.
+//    - Read: Public (dashboard client stats/counters).
+//    - Write: Backend Admin SDK only.
+//
+// 5. /hazard_reports/{document=**}
+//    - Audit logs of citizen submissions with citizen Telegram IDs, phone numbers,
+//      raw photo URLs, and chat identifiers (PII).
+//    - Read: Admins only (isAdmin()).
+//    - Write: Backend Admin SDK only.
+//
+// 6. /feedback/{document=**}
+//    - Citizen feedback submissions containing phone numbers / contact info.
+//    - Read: Admins only (isAdmin()).
+//    - Write: Backend Admin SDK only.
+//
+// 7. /reports/{document=**}
+//    - Legacy citizen reports containing contact details.
+//    - Read: Admins only (isAdmin()).
+//    - Write: Backend Admin SDK only.
+//
+// 8. /hazards/{hazardId}
+//    - Canonical Road Hazards collection. Public map points without citizen PII.
+//    - Created by backend Admin SDK when verified/reported.
+//    - Read: Public (citizen road map view).
+//    - Create/Delete: Denied for client SDKs (Backend Admin SDK only).
+//    - Update: Authorized Admin only. Can only mutate dispatch & status fields:
+//        ['status', 'notes', 'assigned_team', 'updated_at', 'resolved_at']
+//      Status must be one of:
+//        ['reported', 'acknowledged', 'dispatched', 'in_repair', 'resolved']
+//
+// 9. /dumpPoints/{document=**}
+//    - Legacy dump points collection.
+//    - Read: Public.
+//    - Create/Delete: Denied.
+//    - Update: Authorized Admin only. Can only transition status to 'resolved'
+//      and set 'resolved_at'.
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Completely private to backend (Cloud Functions bypass rules using Admin SDK)
+
+    // ===============================================================
+    // Authorization Helper Functions
+    // ===============================================================
+
+    // Check if the request is originating from an authenticated administrator
+    // Grants access via:
+    // 1. Firebase Auth custom claim `admin == true`
+    // 2. Firebase Auth custom claim `role == 'admin'`
+    // 3. Verified domain email matching the official government suffix `@nagarnetra.gov.in`
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'admin' ||
+        (request.auth.token.email != null && request.auth.token.email.matches('.*@nagarnetra[.]gov[.]in$'))
+      );
+    }
+
+    // ===============================================================
+    // 1. Private Backend Collections (Admin SDK Only)
+    // ===============================================================
+
+    // Multi-step session tracking for Telegram bot
+    match /telegram_sessions/{session} {
+      allow read, write: if false;
+    }
+
+    // Multi-step session tracking for WhatsApp bot
     match /whatsapp_sessions/{session} {
       allow read, write: if false;
     }
 
+    // Image deduplication and perceptual hashes
     match /photo_hashes/{hash} {
       allow read, write: if false;
     }
 
-    // Read-only for dashboard client, written by backend
+    // ===============================================================
+    // 2. Metadata Collection
+    // ===============================================================
+
+    // Public read-only system metadata (counters, geofence bounds, telemetry)
     match /meta/{document=**} {
       allow read: if true;
       allow write: if false;
     }
 
-    // Private collections containing citizen PII (phone numbers) - Authenticated Admin read only
+    // ===============================================================
+    // 3. Sensitive Citizen PII Collections (Admin Read Only)
+    // ===============================================================
+
+    // Audit logs of hazard submissions with Telegram chat IDs & user IDs
+    match /hazard_reports/{document=**} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Citizen feedback containing user contact info
     match /feedback/{document=**} {
-      allow read: if request.auth != null;
+      allow read: if isAdmin();
       allow write: if false;
     }
 
+    // Legacy reports containing citizen phone numbers and reporter metadata
     match /reports/{document=**} {
-      allow read: if request.auth != null;
+      allow read: if isAdmin();
       allow write: if false;
     }
 
-    // Read-only for public, restricted update for ticket resolution by authenticated admins
+    // ===============================================================
+    // 4. Road Hazards Collection (SI-02 Canonical)
+    // ===============================================================
+
+    // Public read for citizen hazard map (no citizen PII stored on hazard documents)
+    // Client updates strictly restricted to authorized admins for triage & SLA workflow
+    match /hazards/{hazardId} {
+      allow read: if true;
+      allow create, delete: if false;
+      allow update: if isAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'notes', 'assigned_team', 'updated_at', 'resolved_at'])
+                    && request.resource.data.status in ['reported', 'acknowledged', 'dispatched', 'in_repair', 'resolved'];
+    }
+
+    // ===============================================================
+    // 5. Legacy Dump Points Collection
+    // ===============================================================
+
+    // Legacy public map points with restricted administrative resolution
     match /dumpPoints/{document=**} {
       allow read: if true;
       allow create, delete: if false;
-      allow update: if request.auth != null
+      allow update: if isAdmin()
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolved_at'])
                     && request.resource.data.status == 'resolved';
     }
   }
 }
-
-

@@ -23,11 +23,21 @@ dist-ssr
 *.sln
 *.sw?
 .firebase
+# Environment & Secrets
 .env
 .env.*
+.env.local
 !.env.example
 
+# Service account & cryptographic credentials
 serviceAccount*.json
-*-firebase-adminsdk-*.json
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json
 credentials*.json
+*.pem
+*.key
+
+# Local uploads and scratch artifacts
+functions/uploads/
 scratch/

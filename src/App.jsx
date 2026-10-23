@@ -4,24 +4,50 @@ import SplashScreen from "./components/SplashScreen";
 import AdminPanel from "./pages/AdminPanel";
 import PublicDashboard from "./pages/PublicDashboard";
 import AdminLogin from "./components/AdminLogin";
-import { DUMP_POINTS as MOCK_POINTS, RAW_REPORTS as MOCK_REPORTS, TEAMS as INITIAL_TEAMS, MOCK_FEEDBACKS } from "./data/mockData";
+import {
+  ROAD_HAZARDS,
+  HAZARD_TEAMS,
+  DUMP_POINTS as MOCK_POINTS,
+  RAW_REPORTS as MOCK_REPORTS,
+  MOCK_FEEDBACKS
+} from "./data/mockData";
 import { db, auth } from "./services/firebase";
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 
 const TODAY = new Date();
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://nagarnetra-74tc.onrender.com";
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [activeTab, setActiveTab] = useState("rawfeed");
-  
+
   // Auth State
   const [user, setUser] = useState(null);
 
-  // Real-time Data States
+  // Road Hazards Data States
+  const [fbHazards, setFbHazards] = useState([]);
+  const [statusOverrides, setStatusOverrides] = useState({});
+  const [dataSource, setDataSource] = useState(!db ? "mock" : "loading");
+  const [, setDataError] = useState(null);
+
+  // Legacy Data States (Preserved for backwards compatibility)
   const [fbPoints, setFbPoints] = useState([]);
   const [fbReports, setFbReports] = useState([]);
   const [resolvedOverrides, setResolvedOverrides] = useState({});
+
+  // Filter States
+  const [timeFilter, setTimeFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
+  // Hazard Team Assignments State
+  const [teams, setTeams] = useState(HAZARD_TEAMS);
+  const [teamAssignments, setTeamAssignments] = useState({});
+
+  // Feedback & Action State
+  const [feedbacks, setFeedbacks] = useState(MOCK_FEEDBACKS);
+  const [resolvingIds, setResolvingIds] = useState(new Set());
 
   // Subscribe to Firebase Authentication State
   useEffect(() => {
@@ -44,6 +70,94 @@ export default function App() {
     window.location.href = "/";
   }, []);
 
+  // Subscribe to Firestore collections
+  useEffect(() => {
+    if (!db) {
+      console.warn("[SI-02] Firestore not initialized. Using offline mock datasets.");
+      return;
+    }
+
+    console.log("[SI-02] Attaching real-time Firestore listeners");
+
+    // 1. Primary: Real-time listener on canonical "hazards" collection
+    const unsubHazards = onSnapshot(collection(db, "hazards"), (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      console.log(`[SI-02] Hazards snapshot: ${data.length} documents received.`);
+      setFbHazards(data);
+      setDataSource(data.length > 0 ? "live" : "empty");
+      setDataError(null);
+    }, (err) => {
+      console.warn("[SI-02] hazards listener notice:", err.message);
+      setDataError(err.message);
+      setFbHazards(prev => {
+        if (prev.length === 0) setDataSource("mock");
+        return prev;
+      });
+    });
+
+    // 2. Secondary: Backend API sync for hazards (proxy support)
+    fetch(`${BACKEND_URL}/api/hazards`)
+      .then(res => res.json())
+      .then(result => {
+        if (result.ok && Array.isArray(result.hazards) && result.hazards.length > 0) {
+          console.log(`[SI-02] Synced ${result.hazards.length} hazards via backend proxy`);
+          setFbHazards(prev => {
+            const map = new Map();
+            [...prev, ...result.hazards].forEach(h => map.set(h.id || h.ticket_id, h));
+            return Array.from(map.values());
+          });
+          setDataSource("live");
+        }
+      })
+      .catch(e => console.warn("[SI-02] Backend hazards sync notice:", e.message));
+
+    // 3. Legacy listener on dumpPoints (preserves legacy garbage data)
+    const unsubPoints = onSnapshot(collection(db, "dumpPoints"), (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setFbPoints(data);
+    }, (err) => {
+      console.warn("[SI-02] dumpPoints listener notice:", err.message);
+    });
+
+    // 4. Legacy listener on reports
+    const unsubReports = onSnapshot(collection(db, "reports"), (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setFbReports(prev => {
+        const map = new Map();
+        [...prev, ...data].forEach(r => map.set(r.report_id || r.id, r));
+        return Array.from(map.values());
+      });
+    }, (err) => {
+      console.warn("[SI-02] reports listener notice:", err.message);
+    });
+
+    return () => {
+      unsubHazards();
+      unsubPoints();
+      unsubReports();
+    };
+  }, []);
+
+  // Unified Canonical Road Hazards list
+  const hazards = useMemo(() => {
+    let baseList;
+    if (dataSource === "mock") {
+      baseList = ROAD_HAZARDS;
+    } else if (dataSource === "empty") {
+      baseList = [];
+    } else {
+      baseList = fbHazards.length > 0 ? fbHazards : (!db ? ROAD_HAZARDS : []);
+    }
+    return baseList.map(h => {
+      const override = statusOverrides[h.id] || (h.ticket_id && statusOverrides[h.ticket_id]);
+      if (override) {
+        return { ...h, ...override };
+      }
+      return h;
+    });
+  }, [fbHazards, statusOverrides, dataSource]);
+
+  // Unified Legacy Points list
   const points = useMemo(() => {
     return [...MOCK_POINTS, ...fbPoints].map(p => {
       const safeReportId = p.report_id || p.community_id || p.id;
@@ -55,306 +169,307 @@ export default function App() {
     });
   }, [fbPoints, resolvedOverrides]);
 
-  // Filter States
-  const [timeFilter, setTimeFilter] = useState("all"); 
-  const [severityFilter, setSeverityFilter] = useState("all");
-
-  // Team Assignments State
-  const [teams, setTeams] = useState(INITIAL_TEAMS);
-  const [teamAssignments, setTeamAssignments] = useState({});
-
-  // Feedback & Resolve State
-  const [feedbacks, setFeedbacks] = useState(MOCK_FEEDBACKS);
-  // resolving: Set of pointIds currently being processed (shows spinner)
-  const [resolvingIds, setResolvingIds] = useState(new Set());
-
-  // Subscribe to Firebase if configured
-  useEffect(() => {
-    if (!db) {
-      console.warn("[Dashboard] Firebase Firestore not initialized. Using mock data.");
-      return;
-    }
-
-    console.log("[Dashboard] Firestore listener initialized");
-    console.log("[Dashboard] Firestore project: nagarnetra-4a55d");
-    console.log("[Dashboard] dumpPoints listener attached");
-    console.log("[Dashboard] Source collection: dumpPoints");
-    
-    // 1. Real-time listener on canonical public dumpPoints
-    const unsubPoints = onSnapshot(collection(db, "dumpPoints"), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log(`[Dashboard] Snapshot received - Document count: ${data.length} (from dumpPoints)`);
-      data.forEach(d => {
-        if (d.report_id || d.latest_report_id) {
-          console.log(`[Dashboard] New/updated report in dumpPoints: ${d.latest_report_id || d.report_id}`);
-        }
-      });
-      setFbPoints(data);
-    }, (err) => {
-      console.warn("[Dashboard] dumpPoints listener error:", err.message);
-    });
-
-    // 2. Real-time listener on reports collection
-    console.log("[Dashboard] reports listener attached");
-    console.log("[Dashboard] Source collection: reports");
-    const unsubReports = onSnapshot(collection(db, "reports"), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log(`[Dashboard] Snapshot received - Document count: ${data.length} (from reports)`);
-      data.forEach(d => {
-        if (d.report_id) {
-          console.log(`[Dashboard] New/updated report: ${d.report_id}`);
-        }
-      });
-      setFbReports(prev => {
-        const map = new Map();
-        [...prev, ...data].forEach(r => map.set(r.report_id || r.id, r));
-        return Array.from(map.values());
-      });
-    }, (err) => {
-      console.warn("[Dashboard] reports listener notice (using dumpPoints & API sync):", err.message);
-    });
-
-    // 3. Direct backend sync for reports (bypasses browser client auth restrictions)
-    fetch("https://nagarnetra-74tc.onrender.com/api/reports")
-      .then(res => res.json())
-      .then(result => {
-        if (result.ok && Array.isArray(result.reports)) {
-          console.log(`[Dashboard] Synced ${result.reports.length} reports via backend API proxy`);
-          setFbReports(prev => {
-            const map = new Map();
-            [...prev, ...result.reports].forEach(r => map.set(r.report_id || r.id, r));
-            return Array.from(map.values());
-          });
-        }
-      })
-      .catch(e => console.warn("[Dashboard] Backend reports API sync notice:", e.message));
-
-    let unsubFeedback = () => {};
-    if (user) {
-      unsubFeedback = onSnapshot(collection(db, "feedback"), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setFeedbacks([...MOCK_FEEDBACKS, ...data]);
-      }, (err) => console.warn("[Dashboard] feedback listener permission notice:", err.message));
-    }
-
-    return () => {
-      unsubPoints();
-      unsubReports();
-      unsubFeedback();
-    };
-  }, [user]);
-
-  // Unified Normalized Realtime Reports
+  // Unified Reports list
   const reports = useMemo(() => {
-    // A. Direct reports from Firestore reports collection / API proxy
-    const directReal = fbReports.map(r => ({
-      id: r.id || r.report_id,
-      report_id: r.report_id || r.id,
-      phone_number: r.phone_number || "Telegram Citizen",
-      timestamp: r.timestamp || new Date().toISOString(),
-      matched_point_id: r.matched_point_id || null,
-      matched_point_name: r.matched_point_name || "Citizen Reported Hotspot",
-      photo_url: r.photo_url || null,
-      classification: r.classification || "live_report",
-      isReal: true,
-    }));
+    return [...fbReports, ...MOCK_REPORTS];
+  }, [fbReports]);
 
-    // B. Real reports derived from dumpPoints
-    const derivedReal = [];
-    for (const p of fbPoints) {
-      if (Array.isArray(p.recent_reports) && p.recent_reports.length > 0) {
-        for (const rr of p.recent_reports) {
-          derivedReal.push({
-            id: rr.report_id || `${p.id}_${rr.timestamp}`,
-            report_id: rr.report_id,
-            phone_number: rr.phone_number || p.latest_phone || "Telegram Citizen",
-            timestamp: rr.timestamp || p.last_reported,
-            matched_point_id: p.id,
-            matched_point_name: p.name || "Citizen Reported Hotspot",
-            photo_url: rr.photo_url || p.latest_photo || (p.photos && p.photos[p.photos.length - 1]) || null,
-            classification: rr.classification || "live_report",
-            isReal: true,
-          });
+  // ── Hazard Status Update Handler ──────────────────────────────────────────
+  const handleUpdateHazardStatus = useCallback(async (hazardId, newStatus, notes) => {
+    if (!hazardId || !newStatus) return false;
+
+    const timestamp = new Date().toISOString();
+    const updatePayload = {
+      status: newStatus,
+      updated_at: timestamp,
+    };
+    if (newStatus === "resolved") {
+      updatePayload.resolved_at = timestamp;
+    }
+    if (notes) {
+      updatePayload.notes = notes;
+    }
+
+    let writeSucceeded = false;
+
+    // Retrieve Firebase ID Token if user is authenticated
+    let idToken = null;
+    if (auth?.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (tokenErr) {
+        console.warn("[SI-02] Error fetching ID token:", tokenErr.message);
+      }
+    }
+
+    // 1. Primary: Secure Backend API with verified Admin credentials
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (idToken) {
+        headers["Authorization"] = `Bearer ${idToken}`;
+      }
+      const res = await fetch(`${BACKEND_URL}/api/hazards/${hazardId}/status`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ status: newStatus, notes })
+      });
+      if (res.ok) {
+        const body = await res.json();
+        if (body.ok) {
+          writeSucceeded = true;
+          console.log(`[SI-02] Hazard ${hazardId} updated via authorized backend API`);
         }
-      } else if (p.report_id || p.latest_report_id) {
-        derivedReal.push({
-          id: p.latest_report_id || p.report_id || p.id,
-          report_id: p.latest_report_id || p.report_id,
-          phone_number: p.latest_phone || "Telegram Citizen",
-          timestamp: p.last_reported || p.first_reported || new Date().toISOString(),
-          matched_point_id: p.id,
-          matched_point_name: p.name || "Citizen Reported Hotspot",
-          photo_url: p.latest_photo || (p.photos && p.photos[p.photos.length - 1]) || null,
-          classification: "live_report",
-          isReal: true,
-        });
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        console.warn(`[SI-02] Backend update rejected (${res.status}):`, errBody.error || res.statusText);
+      }
+    } catch (apiErr) {
+      console.warn("[SI-02] Backend status proxy network notice:", apiErr.message);
+    }
+
+    // 2. Secondary: Direct Firestore update restricted by admin security rules
+    if (!writeSucceeded && db && auth?.currentUser) {
+      try {
+        const hazardRef = doc(db, "hazards", hazardId);
+        await updateDoc(hazardRef, updatePayload);
+        writeSucceeded = true;
+        console.log(`[SI-02] Hazard ${hazardId} updated to ${newStatus} in Firestore directly`);
+      } catch (err) {
+        console.warn("[SI-02] Direct Firestore update rejected by rules:", err.message);
       }
     }
 
-    // Combine and de-duplicate real reports
-    const seen = new Set();
-    const uniqueReal = [];
-    for (const r of [...directReal, ...derivedReal]) {
-      const key = r.report_id || r.id;
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        uniqueReal.push(r);
-      }
+    // 3. Fallback for offline demo mode ONLY (when Firebase is completely unconfigured)
+    if (!db && !writeSucceeded) {
+      writeSucceeded = true;
     }
 
-    // Sort descending by timestamp
-    uniqueReal.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    // Combine with MOCK_REPORTS (real reports always on top)
-    const combined = [...uniqueReal, ...MOCK_REPORTS];
-
-    // Development diagnostic for SWC-0037
-    const hasSWC0037 = combined.some(r => r.report_id === "SWC-0037" || r.id === "SWC-0037");
-    if (hasSWC0037) {
-      console.log("[Dashboard] SWC-0037 found in realtime snapshot");
+    if (writeSucceeded) {
+      setStatusOverrides(prev => ({
+        ...prev,
+        [hazardId]: updatePayload,
+      }));
+      return true;
     } else {
-      console.log("[Dashboard] SWC-0037 NOT FOUND in realtime snapshot");
+      console.error(`[SI-02] Administrative write rejected for hazard ${hazardId}`);
+      alert(`Authorization Failed: Hazard ${hazardId} could not be updated. Administrator privileges required.`);
+      return false;
+    }
+  }, []);
+
+  // ── Repair Verification Handlers ──────────────────────────────────────────
+  const handleVerifyRepair = useCallback(async (hazardId, base64Data, mimeType) => {
+    if (!hazardId || !base64Data) return { ok: false, error: "Missing required photo data" };
+
+    let idToken = null;
+    if (auth?.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (err) {
+        console.warn("[SI-02] Error fetching ID token:", err.message);
+      }
     }
 
-    return combined;
-  }, [fbReports, fbPoints]);
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (idToken) headers["Authorization"] = `Bearer ${idToken}`;
 
-  // ── Resolve Handler ────────────────────────────────────────────────────────
+      const res = await fetch(`${BACKEND_URL}/api/hazards/${hazardId}/verify-repair`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ base64: base64Data, mimetype: mimeType || "image/jpeg" })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setStatusOverrides(prev => ({
+          ...prev,
+          [hazardId]: {
+            ...prev[hazardId],
+            repair_photo_url: data.repair_photo_url,
+            verification_status: data.verification_status,
+            verification_confidence: data.confidence,
+            verification_explanation: data.explanation,
+            needs_human_review: data.needs_human_review,
+            status: data.status,
+          }
+        }));
+        return { ok: true, data };
+      } else {
+        alert(`Verification Failed: ${data.error || "Server rejected submission"}`);
+        return { ok: false, error: data.error };
+      }
+    } catch (err) {
+      console.error("[SI-02] Network error during repair verification:", err.message);
+      alert(`Network Error: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  }, []);
+
+  const handleManualVerify = useCallback(async (hazardId, decision, notes) => {
+    if (!hazardId || !decision) return { ok: false };
+
+    let idToken = null;
+    if (auth?.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken();
+      } catch (err) {
+        console.warn("[SI-02] Error fetching ID token:", err.message);
+      }
+    }
+
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (idToken) headers["Authorization"] = `Bearer ${idToken}`;
+
+      const res = await fetch(`${BACKEND_URL}/api/hazards/${hazardId}/manual-verify`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ decision, notes })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setStatusOverrides(prev => ({
+          ...prev,
+          [hazardId]: {
+            ...prev[hazardId],
+            verification_status: data.verification_status,
+            status: data.status,
+            needs_human_review: false,
+          }
+        }));
+        return { ok: true, data };
+      } else {
+        alert(`Manual Override Failed: ${data.error || "Server rejected request"}`);
+        return { ok: false, error: data.error };
+      }
+    } catch (err) {
+      alert(`Network Error: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  }, []);
+
+  // Legacy resolve handler
   const handleResolve = useCallback((pointId) => {
-    const point = points.find(p => p.id === pointId);
-    if (!point || point.status !== "active") return;
-
-    // 1. Add to resolving set (disables button, shows spinner)
     setResolvingIds(prev => new Set([...prev, pointId]));
+    const resolvedDate = new Date().toISOString().split("T")[0];
 
-    // 2. Mark as resolved immediately
-    const resolvedDate = new Date().toISOString().split('T')[0];
-    
-    if (pointId.startsWith("dp_")) {
-      // It's a mock point, apply local override
-      setResolvedOverrides(prev => ({ ...prev, [pointId]: resolvedDate }));
+    // Check if it's a hazard or a dump point
+    const matchingHazard = hazards.find(h => h.id === pointId || h.ticket_id === pointId);
+    if (matchingHazard) {
+      handleUpdateHazardStatus(pointId, "resolved");
     } else {
-      // It's a real point, push to Firestore
-      if (db) {
+      setResolvedOverrides(prev => ({ ...prev, [pointId]: resolvedDate }));
+      if (db && !pointId.startsWith("dp_")) {
         const pointRef = doc(db, "dumpPoints", pointId);
         updateDoc(pointRef, { status: "resolved", resolved_at: resolvedDate }).catch(console.error);
       }
-      // Apply local override to show immediate feedback before Firestore sync
-      setResolvedOverrides(prev => ({ ...prev, [pointId]: resolvedDate }));
     }
 
-    // Find all phone numbers associated with this point
-    const relatedReports = reports.filter(r => r.matched_point_id === pointId);
-    const phoneNumbers = [...new Set(relatedReports.map(r => r.phone_number).filter(Boolean))];
-    
-    // Fallback for demo purposes if no real numbers exist (but try not to use the sandbox number as To)
-    const targetNumbers = phoneNumbers.length > 0 ? phoneNumbers : [];
-
-    // Trigger the real WhatsApp webhook if there are phone numbers
-    if (targetNumbers.length > 0) {
-      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-      const webhookUrl = import.meta.env.DEV 
-        ? `http://127.0.0.1:5001/${projectId}/us-central1/sendFeedbackSurvey`
-        : `https://sendfeedbacksurvey-5hbpammmqa-uc.a.run.app`;
-
-      fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pointId,
-          reportId: point.community_id,
-          pointName: point.name,
-          phoneNumbers: targetNumbers
-        })
-      }).catch(err => console.error("Webhook trigger failed:", err));
-    }
-
-    // 3. Remove from resolving set after 1 second (gives UI time to show spinner)
     setTimeout(() => {
       setResolvingIds(prev => {
         const next = new Set(prev);
         next.delete(pointId);
         return next;
       });
-    }, 1000);
-  }, [points, reports]);
+    }, 800);
+  }, [hazards, handleUpdateHazardStatus]);
 
-  // 1. Filter the data
-  const { filteredPoints, filteredReports } = useMemo(() => {
+  // ── Multi-criteria Filtering ──────────────────────────────────────────────
+  const filteredHazards = useMemo(() => {
     let timeLimit = null;
-    if (timeFilter === "30d") timeLimit = new Date(TODAY.getTime() - 30 * 24 * 60 * 60 * 1000);
-    if (timeFilter === "7d") timeLimit = new Date(TODAY.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-    const fPoints = points.filter(p => {
-      if (timeLimit) {
-        if (!p.last_reported) return false;
-        const reportedDate = new Date(p.last_reported);
-        if (isNaN(reportedDate.getTime()) || reportedDate < timeLimit) return false;
-      }
-      if (severityFilter === "high" && p.report_count < 7) return false;
-      if (severityFilter === "med" && (p.report_count < 3 || p.report_count >= 7)) return false;
-      if (severityFilter === "low" && p.report_count >= 3) return false;
-      return true;
-    });
-
-    const fReports = reports.filter(r => {
-      if (timeLimit) {
-        if (!r.timestamp) return false;
-        const reportDate = new Date(r.timestamp);
-        if (isNaN(reportDate.getTime()) || reportDate < timeLimit) return false;
-      }
-      if (severityFilter !== "all") {
-        if (!r.matched_point_id) return false;
-        const linkedPoint = points.find(dp => dp.id === r.matched_point_id);
-        if (!linkedPoint) return false;
-        
-        if (severityFilter === "high" && linkedPoint.report_count < 7) return false;
-        if (severityFilter === "med" && (linkedPoint.report_count < 3 || linkedPoint.report_count >= 7)) return false;
-        if (severityFilter === "low" && linkedPoint.report_count >= 3) return false;
-      }
-      return true;
-    });
-
-    return { filteredPoints: fPoints, filteredReports: fReports };
-  }, [points, reports, timeFilter, severityFilter]);
-
-  // 2. Compute dynamic stats
-  const dynamicStats = useMemo(() => {
-    const activePoints = filteredPoints.filter(d => d.status === "active").length;
-    const todayStr = TODAY.toISOString().split("T")[0];
-    const newToday = filteredPoints.filter(d => d.last_reported && d.last_reported.startsWith(todayStr)).length;
-    
-    const weekAgo = new Date(TODAY.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const reportsThisWeek = filteredReports.filter(r => r.timestamp && new Date(r.timestamp) >= weekAgo).length;
-    
-    let avgDaysActive = 0;
-    if (filteredPoints.length > 0) {
-      avgDaysActive = Math.round(
-        filteredPoints.reduce((sum, d) => {
-          const first = d.first_reported ? new Date(d.first_reported) : TODAY;
-          const last = d.last_reported ? new Date(d.last_reported) : TODAY;
-          return sum + ((last - first) / (1000 * 60 * 60 * 24));
-        }, 0) / filteredPoints.length
-      );
+    if (timeFilter === "today") {
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      timeLimit = startOfDay;
+    } else if (timeFilter === "7d") {
+      timeLimit = new Date(TODAY.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeFilter === "30d") {
+      timeLimit = new Date(TODAY.getTime() - 30 * 24 * 60 * 60 * 1000);
     }
 
-    return { activePoints, newToday, reportsThisWeek, avgDaysActive };
-  }, [filteredPoints, filteredReports]);
+    return hazards.filter(h => {
+      // Time Filter
+      if (timeLimit) {
+        const dStr = h.created_at || h.last_reported || h.first_reported;
+        if (!dStr) return false;
+        const d = new Date(dStr);
+        if (isNaN(d.getTime()) || d < timeLimit) return false;
+      }
 
+      // Priority Filter (Quartiles: Critical 75–100, High 50–74, Med 25–49, Low 1–24)
+      const score = typeof h.risk_score === "number" ? h.risk_score : 50;
+      const priority = h.priority_label || (score >= 75 ? "Critical" : score >= 50 ? "High" : score >= 25 ? "Medium" : "Low");
+      if (priorityFilter === "critical" && priority !== "Critical" && score < 75) return false;
+      if (priorityFilter === "high" && priority !== "High" && (score < 50 || score >= 75)) return false;
+      if (priorityFilter === "med" && priority !== "Medium" && (score < 25 || score >= 50)) return false;
+      if (priorityFilter === "low" && priority !== "Low" && score >= 25) return false;
+
+      // Category Filter
+      if (categoryFilter !== "all" && h.hazard_type !== categoryFilter) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [hazards, timeFilter, priorityFilter, categoryFilter]);
+
+  // Legacy filteredPoints
+  const filteredPoints = useMemo(() => {
+    return points.filter(p => {
+      if (priorityFilter === "critical" && (p.report_count || 0) < 7) return false;
+      if (priorityFilter === "high" && ((p.report_count || 0) < 3 || (p.report_count || 0) >= 7)) return false;
+      if (priorityFilter === "low" && (p.report_count || 0) >= 3) return false;
+      return true;
+    });
+  }, [points, priorityFilter]);
+
+  // Dynamic Dashboard KPIs (matching reference design)
+  const dynamicStats = useMemo(() => {
+    const activeHazards = filteredHazards.filter(h => h.status !== "resolved").length;
+    const criticalHazards = filteredHazards.filter(h => h.status !== "resolved" && ((h.risk_score || 0) >= 75 || h.priority_label === "Critical")).length;
+    const highHazards = filteredHazards.filter(h => h.status !== "resolved" && (((h.risk_score || 0) >= 50 && (h.risk_score || 0) < 75) || h.priority_label === "High")).length;
+    const mediumHazards = filteredHazards.filter(h => h.status !== "resolved" && (((h.risk_score || 0) >= 25 && (h.risk_score || 0) < 50) || h.priority_label === "Medium")).length;
+    const lowHazards = filteredHazards.filter(h => h.status !== "resolved" && ((h.risk_score || 0) < 25 || h.priority_label === "Low")).length;
+    const pendingReview = filteredHazards.filter(h => h.needs_human_review || h.hazard_type === "unrelated_or_uncertain").length;
+    const resolvedCount = filteredHazards.filter(h => h.status === "resolved").length;
+
+    const todayStr = TODAY.toISOString().split("T")[0];
+    const newToday = filteredHazards.filter(h => {
+      const d = h.created_at || h.last_reported;
+      return d && d.startsWith(todayStr);
+    }).length;
+
+    return {
+      activeHazards,
+      criticalHazards,
+      highHazards,
+      mediumHazards,
+      lowHazards,
+      pendingReview,
+      resolvedCount,
+      activePoints: activeHazards, // legacy alias
+      newToday,
+    };
+  }, [filteredHazards]);
 
   const hostname = window.location.hostname;
-  const isPublicDomain = hostname.includes('swachhos-public');
-  const isAdminDomain = hostname.includes('swachhos-admin');
+  const isPublicDomain = hostname.includes("swachhos-public");
+  const isAdminDomain = hostname.includes("swachhos-admin");
 
   const publicElement = (
-    <PublicDashboard 
-      points={filteredPoints} 
-      reports={filteredReports} 
+    <PublicDashboard
+      hazards={filteredHazards}
+      points={filteredPoints}
+      reports={reports}
       stats={dynamicStats}
       timeFilter={timeFilter}
       setTimeFilter={setTimeFilter}
-      severityFilter={severityFilter}
-      setSeverityFilter={setSeverityFilter}
+      priorityFilter={priorityFilter}
+      setPriorityFilter={setPriorityFilter}
+      categoryFilter={categoryFilter}
+      setCategoryFilter={setCategoryFilter}
     />
   );
 
@@ -365,21 +480,27 @@ export default function App() {
       onCancel={() => window.location.href = "/"}
     />
   ) : (
-    <AdminPanel 
+    <AdminPanel
       dynamicStats={dynamicStats}
       timeFilter={timeFilter}
       setTimeFilter={setTimeFilter}
-      severityFilter={severityFilter}
-      setSeverityFilter={setSeverityFilter}
+      priorityFilter={priorityFilter}
+      setPriorityFilter={setPriorityFilter}
+      categoryFilter={categoryFilter}
+      setCategoryFilter={setCategoryFilter}
       activeTab={activeTab}
       setActiveTab={setActiveTab}
+      filteredHazards={filteredHazards}
       filteredPoints={filteredPoints}
-      filteredReports={filteredReports}
+      filteredReports={reports}
       teamAssignments={teamAssignments}
       setTeamAssignments={setTeamAssignments}
       teams={teams}
       setTeams={setTeams}
       onResolve={handleResolve}
+      onUpdateStatus={handleUpdateHazardStatus}
+      onVerifyRepair={handleVerifyRepair}
+      onManualVerify={handleManualVerify}
       resolvingIds={resolvingIds}
       feedbacks={feedbacks}
       user={user}
@@ -413,7 +534,7 @@ export default function App() {
     );
   }
 
-  // Default behavior for localhost or unspecified domains
+  // Default routing for localhost and single-host deployment
   return (
     <Router>
       {showSplash && <SplashScreen onComplete={handleSplashComplete} />}
@@ -424,4 +545,3 @@ export default function App() {
     </Router>
   );
 }
-

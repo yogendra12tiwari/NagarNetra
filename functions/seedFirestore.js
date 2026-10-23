@@ -3,7 +3,7 @@ const admin = require("firebase-admin");
 // Initialize Firebase Admin SDK using Application Default Credentials / environment project
 if (!admin.apps.length) {
   admin.initializeApp({
-    projectId: process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT || "nagarnetra-4a55d"
+    projectId: process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT || process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety"
   });
 }
 
