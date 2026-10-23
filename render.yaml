@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: nagarnetra-road-safety
+    env: node
+    plan: free
+    region: oregon
+    rootDir: functions
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: FIREBASE_PROJECT_ID
+        value: nagarnetra-road-safety
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        value: nagarnetra-road-safety.firebasestorage.app
+      - key: FIREBASE_SERVICE_ACCOUNT_KEY
+        sync: false
+      - key: TELEGRAM_WEBHOOK_BASE_URL
+        sync: false
