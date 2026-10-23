@@ -7,6 +7,8 @@ const {
   generateHazardTicketId,
   isDuplicateUpdate,
   handleTelegramWebhook,
+  escapeMarkdown,
+  sendTelegramMessage,
 } = require("../telegramHazardBot");
 
 // ── In-Memory Firestore Mock for Unit Testing ────────────────────────────────
@@ -356,5 +358,69 @@ describe("SI-02 Road Hazard Telegram Bot (Phase 1 Unit Tests)", () => {
 
     const sessionDoc = await db.collection("telegram_sessions").doc(String(chatId)).get();
     assert.strictEqual(sessionDoc.exists, false);
+  });
+
+  test("11. Regression: escapeMarkdown escapes underscores, asterisks, backticks, brackets without mangling safe characters", () => {
+    // Test user submitted string with mixed special characters
+    const complexCitizenInput = "Pothole near St. John's Road (approx. 50m) - urgent & deep *danger* _alert_ [tag]";
+    const escaped = escapeMarkdown(complexCitizenInput);
+
+    assert.strictEqual(escaped.includes("\\_"), true);
+    assert.strictEqual(escaped.includes("\\*"), true);
+    assert.strictEqual(escaped.includes("\\["), true);
+    // Safe characters should remain intact
+    assert.strictEqual(escaped.includes("(approx. 50m)"), true);
+    assert.strictEqual(escaped.includes("- urgent & deep"), true);
+    assert.strictEqual(escaped.includes("St. John's Road"), true);
+
+    // Empty and null safety
+    assert.strictEqual(escapeMarkdown(""), "");
+    assert.strictEqual(escapeMarkdown(null), "");
+    assert.strictEqual(escapeMarkdown(undefined), "");
+  });
+
+  test("12. Regression: /start welcome message has balanced Markdown entities and zero bare underscores", async () => {
+    const msg = {
+      chat: { id: 777 },
+      from: { id: 777, first_name: "Citizen_User*123" },
+      text: "/start",
+    };
+
+    const res = await processTelegramMessage(msg, db);
+    assert.strictEqual(res.status, "welcome");
+  });
+
+  test("13. Regression: Webhook secret normalization handles surrounding quotes and whitespace", async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = '"my_secret_token_123"';
+    let statusCode = null;
+    let responseBody = null;
+
+    const mockRes = {
+      status(code) {
+        statusCode = code;
+        return {
+          json(body) { responseBody = body; return body; }
+        };
+      }
+    };
+
+    // Incoming header without quotes matches secret configured with quotes
+    const mockReq = {
+      headers: { "x-telegram-bot-api-secret-token": "my_secret_token_123" },
+      body: { update_id: 999901, message: { chat: { id: 888 }, from: { id: 888 }, text: "/start" } }
+    };
+
+    await handleTelegramWebhook(mockReq, mockRes, db);
+    assert.strictEqual(statusCode, 200);
+    assert.strictEqual(responseBody.ok, true);
+
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
+  });
+
+  test("14. Regression: Plain text fallback handles arbitrary unclosed Markdown safely", () => {
+    // Test that escapeMarkdown cleans unclosed formatting tags
+    const unclosed = "Single _underscore and single *asterisk and single `backtick";
+    const cleaned = escapeMarkdown(unclosed);
+    assert.strictEqual(cleaned, "Single \\_underscore and single \\*asterisk and single \\`backtick");
   });
 });

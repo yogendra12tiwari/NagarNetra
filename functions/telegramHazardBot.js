@@ -37,33 +37,62 @@ function isDuplicateUpdate(updateId) {
   return false;
 }
 
+/**
+ * Escapes special Markdown characters in user-provided or dynamic text
+ * to prevent Telegram entity parsing errors.
+ * Special characters in Telegram legacy Markdown: _, *, `, [
+ */
+function escapeMarkdown(text) {
+  if (text === null || text === undefined) return "";
+  return String(text).replace(/([_*`\[\\])/g, "\\$1");
+}
+
 // ── Telegram Bot API Network Helpers ─────────────────────────────────────────
 async function sendTelegramMessage(chatId, text, options = {}) {
-  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim().replace(/^["']|["']$/g, "").replace(/^bot/, "");
   if (!token) {
     console.warn("[Telegram] TELEGRAM_BOT_TOKEN not configured; cannot send message.");
     return { success: false, error: "TELEGRAM_BOT_TOKEN not configured" };
   }
 
+  const parseMode = options.parse_mode !== undefined ? options.parse_mode : "Markdown";
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const body = {
-    chat_id: chatId,
-    text: String(text),
-    parse_mode: options.parse_mode || "Markdown",
+
+  const buildBody = (mode) => {
+    const payload = {
+      chat_id: chatId,
+      text: String(text),
+    };
+    if (mode) {
+      payload.parse_mode = mode;
+    }
+    if (options.reply_markup) {
+      payload.reply_markup = options.reply_markup;
+    }
+    return payload;
   };
 
-  if (options.reply_markup) {
-    body.reply_markup = options.reply_markup;
-  }
-
   try {
-    const response = await fetch(url, {
+    let response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(buildBody(parseMode)),
     });
 
-    const data = await response.json().catch(() => ({}));
+    let data = await response.json().catch(() => ({}));
+
+    // Resilient fallback: If Telegram rejects due to entity parsing error (HTTP 400 Bad Request: can't parse entities),
+    // retry once immediately in plain text mode (omitting parse_mode) so the message is guaranteed to reach the user.
+    if (!response.ok && data.description && data.description.includes("can't parse entities") && parseMode) {
+      console.warn(`[Telegram] Entity parsing failed (${data.description}). Retrying message delivery in plain text.`);
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildBody(null)),
+      });
+      data = await response.json().catch(() => ({}));
+    }
+
     if (!response.ok || !data.ok) {
       console.error("[Telegram] API error:", {
         status: response.status,
@@ -189,7 +218,7 @@ async function processTelegramMessage(message, db, options = {}) {
       `I am your civic assistant for reporting and tracking road hazards.\n\n` +
       `*Available Commands:*\n` +
       `• /report — Report a new road hazard\n` +
-      `• /status <ticket_id> — Track your report (e.g. \`/status HAZ-2026-0001\`)\n` +
+      `• \`/status <ticket_id>\` — Track your report (e.g. \`/status HAZ-2026-0001\`)\n` +
       `• /cancel — Cancel an ongoing report\n\n` +
       `*Supported Hazard Types:*\n` +
       `🕳️ Potholes & damaged roads\n` +
@@ -225,7 +254,7 @@ async function processTelegramMessage(message, db, options = {}) {
     if (snapshot.empty) {
       await sendTelegramMessage(chatId,
         `❌ *Ticket Not Found*\n\n` +
-        `No road hazard report found with Ticket ID: \`${requestedCode}\`.\n` +
+        `No road hazard report found with Ticket ID: \`${escapeMarkdown(requestedCode)}\`.\n` +
         `Please check the ID and try again, or send /report to file a new report.`
       );
       return { status: "ticket_not_found" };
@@ -259,7 +288,7 @@ async function processTelegramMessage(message, db, options = {}) {
 
     const clusterLine = hazard.cluster_id
       ? (hazard.canonical_ticket_id
-          ? `👥 *Incident Cluster:* Linked to \`${hazard.canonical_ticket_id}\` (${hazard.distance_to_canonical_meters || "approx. 50"}m away)\n`
+          ? `👥 *Incident Cluster:* Linked to \`${escapeMarkdown(hazard.canonical_ticket_id)}\` (${hazard.distance_to_canonical_meters || "approx. 50"}m away)\n`
           : `👥 *Incident Cluster:* Lead cluster with ${hazard.report_count || 1} report(s)\n`)
       : (hazard.report_count > 1 ? `👥 *Citizen Reports:* ${hazard.report_count} linked reports\n` : "");
 
@@ -274,21 +303,21 @@ async function processTelegramMessage(message, db, options = {}) {
 
     const statusMsg =
       `📋 *Road Hazard Status Report*\n\n` +
-      `🎫 *Ticket ID:* \`${hazard.ticket_id}\`\n` +
-      `📂 *Category:* ${hazard.category || "Unclassified hazard pending review"}\n` +
+      `🎫 *Ticket ID:* \`${escapeMarkdown(hazard.ticket_id)}\`\n` +
+      `📂 *Category:* ${escapeMarkdown(hazard.category || "Unclassified hazard pending review")}\n` +
       `📊 *Status:* *${statusBadge}*\n` +
-      `⚠️ *Severity:* ${hazard.severity || "Pending review"}\n` +
-      `🎯 *Risk Priority:* ${riskBadge}\n` +
+      `⚠️ *Severity:* ${escapeMarkdown(hazard.severity || "Pending review")}\n` +
+      `🎯 *Risk Priority:* ${escapeMarkdown(riskBadge)}\n` +
       clusterLine +
       slaLines +
       verificationLine +
       `📍 *Location:* ${hazard.lat ? hazard.lat.toFixed(5) : "N/A"}, ${hazard.lng ? hazard.lng.toFixed(5) : "N/A"}\n` +
       `📅 *Reported:* ${formatDate(hazard.created_at || hazard.first_reported)}\n` +
       `🔄 *Last Update:* ${formatDate(hazard.updated_at || hazard.last_reported)}\n` +
-      (hazard.assigned_team ? `👷 *Assigned Team:* ${hazard.assigned_team.name || hazard.assigned_team}\n` : "") +
-      (hazard.recommended_action ? `🛠️ *Recommended Action:* ${hazard.recommended_action}\n` : "") +
+      (hazard.assigned_team ? `👷 *Assigned Team:* ${escapeMarkdown(hazard.assigned_team.name || hazard.assigned_team)}\n` : "") +
+      (hazard.recommended_action ? `🛠️ *Recommended Action:* ${escapeMarkdown(hazard.recommended_action)}\n` : "") +
       (hazard.needs_human_review ? `🔍 *Triage Notice:* Flagged for operator review\n` : "") +
-      (hazard.verification_notes ? `📝 *Notes:* ${hazard.verification_notes}\n` : "");
+      (hazard.verification_notes ? `📝 *Notes:* ${escapeMarkdown(hazard.verification_notes)}\n` : "");
 
     await sendTelegramMessage(chatId, statusMsg);
     return { status: "status_returned", ticket_id: requestedCode };
@@ -330,9 +359,9 @@ async function processTelegramMessage(message, db, options = {}) {
   if (!sessionSnap.exists) {
     // No active session and no recognized command
     await sendTelegramMessage(chatId,
-      `👋 Hello ${firstName}!\n\n` +
+      `👋 Hello ${escapeMarkdown(firstName)}!\n\n` +
       `To report a road hazard, please send /report.\n` +
-      `To track an existing report, send /status <ticket_id>.\n` +
+      `To track an existing report, send \`/status <ticket_id>\`.\n` +
       `Send /help to see all options.`
     );
     return { status: "no_active_session" };
@@ -693,9 +722,9 @@ async function handleTelegramWebhook(req, res, dbOverride) {
   const db = dbOverride || admin.firestore();
 
   // 1. Webhook Secret Token Verification (X-Telegram-Bot-Api-Secret-Token)
-  const webhookSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+  const webhookSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim().replace(/^["']|["']$/g, "");
   if (webhookSecret) {
-    const incomingSecret = req.headers["x-telegram-bot-api-secret-token"];
+    const incomingSecret = (req.headers["x-telegram-bot-api-secret-token"] || "").trim().replace(/^["']|["']$/g, "");
     if (incomingSecret !== webhookSecret) {
       console.warn("[Telegram Webhook] Unauthorized request rejected: secret token mismatch.");
       return res.status(403).json({ ok: false, error: "Unauthorized" });
@@ -731,15 +760,15 @@ async function handleTelegramWebhook(req, res, dbOverride) {
 
 // ── Protected Webhook Registration Endpoint ──────────────────────────────────
 async function setTelegramWebhookHandler(req, res) {
-  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim().replace(/^["']|["']$/g, "").replace(/^bot/, "");
   if (!token) {
     return res.status(400).json({ ok: false, error: "TELEGRAM_BOT_TOKEN is not configured" });
   }
 
   // Admin secret protection for webhook setup (supports ADMIN_SECRET or legacy TELEGRAM_WEBHOOK_ADMIN_SECRET)
-  const adminSecret = (process.env.ADMIN_SECRET || process.env.TELEGRAM_WEBHOOK_ADMIN_SECRET || "").trim();
+  const adminSecret = (process.env.ADMIN_SECRET || process.env.TELEGRAM_WEBHOOK_ADMIN_SECRET || "").trim().replace(/^["']|["']$/g, "");
   if (adminSecret) {
-    const provided = req.headers["x-admin-secret"] || req.query.admin_secret;
+    const provided = (req.headers["x-admin-secret"] || req.query.admin_secret || "").trim().replace(/^["']|["']$/g, "");
     if (provided !== adminSecret) {
       return res.status(403).json({ ok: false, error: "Unauthorized: admin secret required" });
     }
@@ -752,7 +781,7 @@ async function setTelegramWebhookHandler(req, res) {
     url: webhookUrl,
   };
 
-  const webhookSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+  const webhookSecret = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim().replace(/^["']|["']$/g, "");
   if (webhookSecret) {
     webhookParams.secret_token = webhookSecret;
   }
@@ -771,6 +800,7 @@ async function setTelegramWebhookHandler(req, res) {
       secretConfigured: Boolean(webhookSecret),
     });
   } catch (err) {
+    console.error("[Telegram Set-Webhook] Network error:", err.message);
     return res.status(500).json({ ok: false, error: err.message });
   }
 }
@@ -781,6 +811,7 @@ module.exports = {
   processTelegramMessage,
   generateHazardTicketId,
   sendTelegramMessage,
+  escapeMarkdown,
   getTelegramFileUrl,
   isDuplicateUpdate,
   SUPPORTED_CATEGORIES,
