@@ -55,38 +55,10 @@ app.options("*", cors());
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 app.use(express.json({ limit: "15mb" }));
 
-// Initialize Firebase Admin SDK for Render
-if (!admin.apps.length) {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-    try {
-      const sa = JSON.parse(
-        process.env.FIREBASE_SERVICE_ACCOUNT_KEY.startsWith("{")
-          ? process.env.FIREBASE_SERVICE_ACCOUNT_KEY
-          : Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_KEY, "base64").toString("utf-8")
-      );
-      const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
-      const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`;
-      admin.initializeApp({
-        credential: admin.credential.cert(sa),
-        projectId,
-        storageBucket
-      });
-    } catch (e) {
-      console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY, using default admin init:", e.message);
-      const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
-      admin.initializeApp({
-        projectId,
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`
-      });
-    }
-  } else {
-    const projectId = process.env.FIREBASE_PROJECT_ID || "nagarnetra-road-safety";
-    admin.initializeApp({
-      projectId,
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`
-    });
-  }
-}
+const { initializeFirebaseAdmin } = require("./firebaseInit");
+
+// Initialize Firebase Admin SDK for Render with robust parsing & sanitized diagnostics
+const { diagnostics: firebaseDiagnostics } = initializeFirebaseAdmin();
 
 const db = admin.firestore();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -1414,6 +1386,11 @@ app.listen(PORT, () => {
     console.log("[Server] Telegram Bot channel: ENABLED");
   } else {
     console.log("[Server] Telegram Bot channel: NOT CONFIGURED (TELEGRAM_BOT_TOKEN missing)");
+  }
+  if (firebaseDiagnostics.explicitCredentials) {
+    console.log(`[Server] Firebase Admin: AUTHENTICATED (Format: ${firebaseDiagnostics.format}, Project: ${firebaseDiagnostics.credentialProjectId})`);
+  } else {
+    console.log(`[Server] Firebase Admin: UNCONFIGURED / ADC DEFAULT (Project: ${firebaseDiagnostics.configuredProjectId})`);
   }
 });
 
