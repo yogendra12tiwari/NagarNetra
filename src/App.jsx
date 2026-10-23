@@ -140,14 +140,7 @@ export default function App() {
 
   // Unified Canonical Road Hazards list
   const hazards = useMemo(() => {
-    let baseList;
-    if (dataSource === "mock") {
-      baseList = ROAD_HAZARDS;
-    } else if (dataSource === "empty") {
-      baseList = [];
-    } else {
-      baseList = fbHazards.length > 0 ? fbHazards : (!db ? ROAD_HAZARDS : []);
-    }
+    let baseList = fbHazards.length > 0 ? fbHazards : ROAD_HAZARDS;
     return baseList.map(h => {
       const override = statusOverrides[h.id] || (h.ticket_id && statusOverrides[h.ticket_id]);
       if (override) {
